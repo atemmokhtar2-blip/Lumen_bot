@@ -32,12 +32,14 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [ok, service, version]
                 properties:
                   ok:
                     type: boolean
                   service:
                     type: string
-                    pattern: '^lumen-api
+                  version:
+                    type: string
   /health:
     get:
       # kics-scan ignore-line

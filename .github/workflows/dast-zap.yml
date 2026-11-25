@@ -180,27 +180,31 @@ jobs:
       - name: ZAP authenticated baseline (tenant A key via Replacer)
         env:
           DAST_SEED_FILE: ${{ runner.temp }}/dast-tenants.json
+          ZAP_AUTH_CONFIG: ${{ runner.temp }}/zap-auth.properties
         run: |
-          set +e
+          set -euo pipefail
           KEY=$(python -c "import json;print(json.load(open('$DAST_SEED_FILE'))['tenant_a']['key'])")
           echo "::add-mask::$KEY"
+          umask 077
+          {
+            echo "replacer.full_list(0).description=tenant-a-auth"
+            echo "replacer.full_list(0).enabled=true"
+            echo "replacer.full_list(0).matchtype=REQ_HEADER"
+            echo "replacer.full_list(0).matchstr=Authorization"
+            echo "replacer.full_list(0).regex=false"
+            printf 'replacer.full_list(0).replacement=Bearer %s\\n' "$KEY"
+          } > "$ZAP_AUTH_CONFIG"
           docker run --rm --user 0 --network host \
             -v "${{ github.workspace }}:/zap/wrk:rw" \
             -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
+            -v "$ZAP_AUTH_CONFIG:/zap/auth.properties:ro" \
             "$ZAP_IMAGE" \
-            zap-baseline.py -t "$DAST_HEALTH_URL" -a \
+            zap-baseline.py -t "$DAST_BASE_URL/v1/me" -a \
               -c /zap/rules/rules.tsv \
               -J zap-auth-report.json \
-              -z "-config replacer.full_list(0).description=auth \
-                  -config replacer.full_list(0).enabled=true \
-                  -config replacer.full_list(0).matchtype=REQ_HEADER \
-                  -config replacer.full_list(0).matchstr=Authorization \
-                  -config replacer.full_list(0).replacement=Bearer ${KEY} \
-                  -config replacer.full_list(0).regex=false"
-          code=$?
-          echo "zap-auth exit=$code"
-          test -f zap-auth-report.json || { echo "missing ZAP auth JSON report"; exit 1; }
-          if [ "$code" -ne 0 ]; then exit $code; fi
+              -r zap-auth-report.html \
+              -z "-configfile /zap/auth.properties"
+          test -s zap-auth-report.json || { echo "missing/empty ZAP auth JSON report"; exit 1; }
 
       - name: Fail on MEDIUM/HIGH in ZAP JSON (engine output)
         run: |
@@ -220,7 +224,7 @@ jobs:
         if: always()
         env:
           DAST_SEED_FILE: ${{ runner.temp }}/dast-tenants.json
-        run: rm -f "$DAST_SEED_FILE" zap-auth-report.json
+        run: rm -f "$DAST_SEED_FILE" "${{ runner.temp }}/zap-auth.properties" zap-auth-report.json zap-auth-report.html
 
       - name: Upload ZAP engine artifacts
         if: always()
@@ -232,6 +236,7 @@ jobs:
             zap-baseline-report.html
             zap-api-report.json
             zap-api-report.html
+            zap-auth-report.html
           if-no-files-found: ignore
           retention-days: 14
 
