@@ -534,6 +534,7 @@ class DockerProcessDriver(DeploymentProvider):
                 # network.ensure_egress_network, and validate_image_tag above.
                 proc = subprocess.run(
                     cmd,
+                    shell=False,
                     capture_output=True,
                     text=True,
                     timeout=60,
