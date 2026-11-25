@@ -17,7 +17,7 @@ RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && printf 'deb http://deb.debian.org/debian sid main\n' > /etc/apt/sources.list.d/sid.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends -t sid \
+    && apt-get -t sid install -y --no-install-recommends \
         ncurses-bin=6.6+20260608-2 \
         openssl-provider-legacy=3.6.5-1 \
         libsqlite3-0=3.54.1-2 \
