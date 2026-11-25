@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -42,6 +43,10 @@ class Tenant:
             "custom_domain": self.custom_domain,
             "api_key_prefix": self.api_key_prefix,
             "active": self.active,
-            "created_at": self.created_at,
+            # Keep the creation instant while exposing an unambiguous UTC string;
+            # raw Unix epochs trigger timestamp-disclosure findings in authenticated API scans.
+            "created_at": datetime.fromtimestamp(
+                float(self.created_at), timezone.utc
+            ).isoformat(timespec="seconds").replace("+00:00", "Z"),
             "white_label": self.is_white_label(),
         }
