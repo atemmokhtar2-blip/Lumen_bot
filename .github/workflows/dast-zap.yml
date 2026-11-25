@@ -241,6 +241,7 @@ jobs:
             zap-api-report.json
             zap-api-report.html
             zap-auth-report.html
+            zap-auth-report.json
           if-no-files-found: ignore
           retention-days: 14
 
