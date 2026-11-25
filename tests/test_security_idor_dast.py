@@ -72,6 +72,22 @@ def _reset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     tenants_mod._STORE = None
     credits_mod._SVC = None
+
+    # Each test case gets an isolated Redis namespace. The limiter remains
+    # enabled; this prevents one test's localhost traffic from exhausting the
+    # next test's IP / tenant-create buckets.
+    monkeypatch.setenv("REDIS_RATE_PREFIX", f"test:{tmp_path.name}:")
+    import lumen.platform.rate_limit as rate_limit_mod
+    rate_limit_mod._LIMITER = None
+
+    # The composition root caches repository adapters. Clear those adapters
+    # after resetting the backing store so auth never points at a prior test's
+    # tenant registry.
+    try:
+        from lumen.bootstrap import reset_repositories
+        reset_repositories()
+    except Exception:
+        pass
     try:
         credits_mod.reset_credit_service_for_tests()
     except Exception:
@@ -309,7 +325,10 @@ def test_escalation_dev_activate_locked(monkeypatch, tmp_path):
             json={"plan_id": "enterprise"},
             headers={"Authorization": f"Bearer {ctx['key_a']}"},
         )
-        assert r.status in (401, 403)
+        # The legacy dev-activation endpoint is intentionally retired:
+        # 410 proves no activation occurred and is the expected safe response.
+        assert r.status == 410
+        assert (await r.json()).get("error") == "plans_removed"
 
     asyncio.run(_world(monkeypatch, tmp_path, body))
 
