@@ -241,12 +241,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Pull official Scorecard image from GHCR
+        run: docker pull ghcr.io/ossf/scorecard:v5.7.0
       - name: Run Scorecard
-        uses: ossf/scorecard-action@v2.5.0
-        with:
-          results_file: results.sarif
-          results_format: sarif
-          publish_results: true
+        env:
+          GITHUB_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          docker run --rm \
+            -e GITHUB_AUTH_TOKEN \
+            -v "${{ github.workspace }}:/workspace" \
+            ghcr.io/ossf/scorecard:v5.7.0 \
+            --repo="github.com/${GITHUB_REPOSITORY}" \
+            --format=sarif \
+            --output=/workspace/results.sarif
       - name: Upload Scorecard SARIF
         uses: github/codeql-action/upload-sarif@v4
         with:
