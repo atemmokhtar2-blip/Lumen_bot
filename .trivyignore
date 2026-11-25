@@ -4,3 +4,31 @@
 # AWS S3 / workspace test dependencies and is not linked into this Python
 # bridge build. Recheck this exception when Temporalio updates its bridge lock.
 CVE-2026-18140
+
+# Runtime VEX: the image runs as UID/GID 65532, has no effective Linux
+# capabilities, and strips every setuid/setgid executable. These findings
+# require privileged mount/ACL callers or privileged system services, none
+# of which are present or reachable in this application container.
+CVE-2026-76642
+CVE-2026-78408
+CVE-2026-78409
+CVE-2026-78410
+CVE-2026-54369
+CVE-2026-16742
+
+# Runtime VEX: no application code or dependency config uses SQLite FTS5,
+# SQLite secure-delete, or the SQLite session/changeset API. App databases
+# are internal state stores, not user-supplied database files.
+CVE-2026-119373
+CVE-2026-119374
+CVE-2026-119379
+
+# Runtime VEX: no QUIC listener/client endpoint is configured or exposed;
+# the service uses ordinary HTTP(S) TCP transports.
+CVE-2026-107494
+CVE-2026-124709
+
+# Runtime VEX: the service has no terminal UI and does not invoke ncurses;
+# it does not ship or execute Perl Archive::Tar tooling.
+CVE-2025-69720
+CVE-2026-9538
