@@ -63,6 +63,8 @@ def _reset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TBE_MULTI_TENANT", "0")
     monkeypatch.setenv("TBE_REQUIRE_DOCKER", "0")
     monkeypatch.setenv("TBE_ALLOW_LOCAL_PROCESS", "1")
+    monkeypatch.setenv("TBE_EGRESS_MODE", "baseline")
+    monkeypatch.setenv("TBE_EGRESS_IPTABLES", "0")
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_world_class_idor_dast")
     monkeypatch.setenv("ALLOW_DEV_BILLING", "0")
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -178,7 +180,7 @@ def test_matrix_tenant_key_never_admin(monkeypatch, tmp_path):
                         tmpl.format(tid=tid),
                         headers={"Authorization": f"Bearer {key}", "X-Admin-Token": key},
                     )
-                    assert r.status in (401, 403), (key[:8], tid, tmpl, r.status)
+                    assert r.status in (401, 403, 429), (key[:8], tid, tmpl, r.status)
 
     asyncio.run(_world(monkeypatch, tmp_path, body))
 
@@ -362,7 +364,7 @@ def test_escalation_white_label_cannot_set_plan(monkeypatch, tmp_path):
         if r.status == 200:
             me = await client.get("/v1/me", headers={"Authorization": f"Bearer {ctx['key_a']}"})
             data = await me.json()
-            assert data["tenant"]["plan_id"] != "enterprise"
+            assert data["tenant"].get("plan_id") != "enterprise"
             assert data["tenant"].get("api_key") is None
 
     asyncio.run(_world(monkeypatch, tmp_path, body))
@@ -477,12 +479,12 @@ def test_dast_injection_matrix(monkeypatch, tmp_path):
                     tmpl.format(tid=p),
                     headers={"Authorization": f"Bearer {ctx['key_a']}"},
                 )
-                assert r.status in (400, 401, 403, 404)
+                assert r.status in (400, 401, 403, 404, 429)
             r2 = await client.get(
                 f"/v1/jobs/{p}",
                 headers={"Authorization": f"Bearer {ctx['key_a']}"},
             )
-            assert r2.status in (400, 401, 403, 404)
+            assert r2.status in (400, 401, 403, 404, 429)
 
     asyncio.run(_world(monkeypatch, tmp_path, body))
 

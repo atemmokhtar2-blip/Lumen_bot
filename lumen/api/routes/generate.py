@@ -53,6 +53,52 @@ async def generate(request: web.Request) -> web.Response:
     """
     tenant = require_tenant(request)
 
+    # Strict per-tenant generate rate limit (defense in depth beyond plan quotas)
+    lim = get_rate_limiter()
+    if not lim.allow(f"generate:{tenant.tenant_id}", limit=max(1, _GEN_RPM), window_sec=60.0):
+        retry = lim.seconds_until_allow(
+            f"generate:{tenant.tenant_id}", limit=max(1, _GEN_RPM), window_sec=60.0
+        )
+        raise web.HTTPTooManyRequests(
+            text=f'{{"error":"generate_rate_limited","retry_after":{retry}}}',
+            content_type="application/json",
+            headers={"Retry-After": str(retry)},
+        )
+
+    from lumen.api.security import parse_json_object_bytes, read_capped_body
+
+    try:
+        raw = await read_capped_body(request, max_bytes=_MAX_BODY_BYTES)
+        body = parse_json_object_bytes(raw, empty_ok=False)
+    except ValueError as exc:
+        code = _safe_error_code(exc, default="invalid_json")
+        if code == "payload_too_large":
+            raise web.HTTPRequestEntityTooLarge(
+                max_size=_MAX_BODY_BYTES,
+                actual_size=_MAX_BODY_BYTES + 1,
+                text='{"error":"payload_too_large"}',
+                content_type="application/json",
+            )
+        raise web.HTTPBadRequest(
+            text=f'{{"error":"{code}"}}',
+            content_type="application/json",
+        )
+
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
+    description = str(body.get("description") or body.get("prompt") or "").strip()
+    if len(description) < 3:
+        raise web.HTTPBadRequest(
+            text='{"error":"description_required"}',
+            content_type="application/json",
+        )
+    if len(description) > _MAX_DESCRIPTION:
+        raise web.HTTPBadRequest(
+            text=f'{{"error":"description_too_long","max":{_MAX_DESCRIPTION}}}',
+            content_type="application/json",
+        )
+
+    # Resource and billing gates run only after request shape and tenant ownership
+    # are validated, so malformed/spoofed payloads cannot be masked by 402/503.
     # ROOT FIX: refuse generation when no strong sandbox (never host-execute untrusted code).
     try:
         from lumen.engine.services.isolation_policy import (
@@ -89,55 +135,12 @@ async def generate(request: web.Request) -> web.Response:
             headers={"Retry-After": "30"},
         )
 
-    # Strict per-tenant generate rate limit (defense in depth beyond plan quotas)
-    lim = get_rate_limiter()
-    if not lim.allow(f"generate:{tenant.tenant_id}", limit=max(1, _GEN_RPM), window_sec=60.0):
-        retry = lim.seconds_until_allow(
-            f"generate:{tenant.tenant_id}", limit=max(1, _GEN_RPM), window_sec=60.0
-        )
-        raise web.HTTPTooManyRequests(
-            text=f'{{"error":"generate_rate_limited","retry_after":{retry}}}',
-            content_type="application/json",
-            headers={"Retry-After": str(retry)},
-        )
 
     # Body: RAW_BODY_PATHS — capped read + single root parser (no request.json()).
     ok, reason = get_billing().enforce_generation(tenant.tenant_id)
     if not ok:
         raise web.HTTPPaymentRequired(
             text=f'{{"error":"{reason}"}}',
-            content_type="application/json",
-        )
-
-    from lumen.api.security import parse_json_object_bytes, read_capped_body
-
-    try:
-        raw = await read_capped_body(request, max_bytes=_MAX_BODY_BYTES)
-        body = parse_json_object_bytes(raw, empty_ok=False)
-    except ValueError as exc:
-        code = _safe_error_code(exc, default="invalid_json")
-        if code == "payload_too_large":
-            raise web.HTTPRequestEntityTooLarge(
-                max_size=_MAX_BODY_BYTES,
-                actual_size=_MAX_BODY_BYTES + 1,
-                text='{"error":"payload_too_large"}',
-                content_type="application/json",
-            )
-        raise web.HTTPBadRequest(
-            text=f'{{"error":"{code}"}}',
-            content_type="application/json",
-        )
-
-    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
-    description = str(body.get("description") or body.get("prompt") or "").strip()
-    if len(description) < 3:
-        raise web.HTTPBadRequest(
-            text='{"error":"description_required"}',
-            content_type="application/json",
-        )
-    if len(description) > _MAX_DESCRIPTION:
-        raise web.HTTPBadRequest(
-            text=f'{{"error":"description_too_long","max":{_MAX_DESCRIPTION}}}',
             content_type="application/json",
         )
 

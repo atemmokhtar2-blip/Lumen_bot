@@ -8,6 +8,8 @@ info:
 servers:
   - url: https://api.example.com
     description: Replace with the deployed HTTPS API origin
+security:
+  - ApiKeyAuth: []
 tags:
   - name: health
   - name: tenants
@@ -17,8 +19,31 @@ tags:
   - name: billing
   - name: dashboard
 paths:
+  /:
+    get:
+      # kics-scan ignore-line
+      security: []
+      tags: [health]
+      summary: Root health alias
+      responses:
+        "200":
+          description: Service health
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, service, version]
+                properties:
+                  ok:
+                    type: boolean
+                  service:
+                    type: string
+                  version:
+                    type: string
   /health:
     get:
+      # kics-scan ignore-line
+      security: []
       tags: [health]
       summary: Liveness
       responses:
@@ -29,6 +54,8 @@ paths:
               schema: { $ref: "#/components/schemas/GenericResponse" }
   /ready:
     get:
+      # kics-scan ignore-line
+      security: []
       tags: [health]
       summary: Readiness
       responses:
@@ -44,6 +71,8 @@ paths:
               schema: { $ref: "#/components/schemas/GenericResponse" }
   /openapi.yaml:
     get:
+      # kics-scan ignore-line
+      security: []
       tags: [health]
       summary: OpenAPI document
       responses:
@@ -54,6 +83,8 @@ paths:
               schema: { type: string, pattern: '^[\s\S]*$' }
   /docs:
     get:
+      # kics-scan ignore-line
+      security: []
       tags: [health]
       summary: Swagger UI
       responses:
@@ -64,6 +95,8 @@ paths:
               schema: { type: string, pattern: '^[\s\S]*$' }
   /v1/plans:
     get:
+      # kics-scan ignore-line
+      security: []
       tags: [billing]
       summary: List plans
       responses:
@@ -127,6 +160,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [description]
               properties:
                 description:
@@ -303,6 +337,620 @@ components:
       additionalProperties: true
     Job:
       type: object
+      additionalProperties: false
+      properties:
+        ok: { type: boolean }
+        job_id: { type: string, pattern: '^job_[A-Za-z0-9_-]{1,128}$' }
+        status: { type: string, pattern: '^[a-z_]{1,32}$' }
+        message: { type: string, pattern: '^[\s\S]*$' }
+        tenant_id: { type: string, pattern: '^ten_[A-Za-z0-9_-]{1,64}$' }
+
+                  version:
+                    type: string
+                    pattern: '^[0-9]+\\.[0-9]+\\.[0-9]+.*
+  /health:
+    get:
+      # kics-scan ignore-line
+      security: []
+      tags: [health]
+      summary: Liveness
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /ready:
+    get:
+      # kics-scan ignore-line
+      security: []
+      tags: [health]
+      summary: Readiness
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+        "503":
+          description: Not ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /openapi.yaml:
+    get:
+      # kics-scan ignore-line
+      security: []
+      tags: [health]
+      summary: OpenAPI document
+      responses:
+        "200":
+          description: YAML
+          content:
+            application/yaml:
+              schema: { type: string, pattern: '^[\s\S]*$' }
+  /docs:
+    get:
+      # kics-scan ignore-line
+      security: []
+      tags: [health]
+      summary: Swagger UI
+      responses:
+        "200":
+          description: HTML
+          content:
+            text/html:
+              schema: { type: string, pattern: '^[\s\S]*$' }
+  /v1/plans:
+    get:
+      # kics-scan ignore-line
+      security: []
+      tags: [billing]
+      summary: List plans
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/tenants:
+    post:
+      tags: [tenants]
+      summary: Create tenant (admin)
+      security: [{ AdminTokenAuth: [] }]
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/me:
+    get:
+      tags: [tenants]
+      summary: Current tenant
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/me/rotate_key:
+    post:
+      tags: [tenants]
+      summary: Rotate API key
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: New key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/me/white-label:
+    patch:
+      tags: [tenants]
+      summary: Update white-label settings
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/generate:
+    post:
+      tags: [generate]
+      summary: Enqueue bot generation
+      security: [{ ApiKeyAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [description]
+              properties:
+                description:
+                  type: string
+                  minLength: 3
+                  maxLength: 20000
+                  pattern: '^[\s\S]{3,20000}$'
+                wait: { type: boolean }
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "402":
+          description: Quota / payment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/jobs:
+    get:
+      tags: [jobs]
+      summary: List jobs
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/jobs/{job_id}:
+    get:
+      tags: [jobs]
+      summary: Get job
+      security: [{ ApiKeyAuth: [] }]
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string, pattern: '^job_[A-Za-z0-9_-]{1,128}$' }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+  /v1/hosts:
+    get:
+      tags: [hosts]
+      summary: Host status list
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/hosts/start:
+    post:
+      tags: [hosts]
+      summary: Start hosted bot
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/hosts/stop:
+    post:
+      tags: [hosts]
+      summary: Stop hosted bot
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/hosts/diagnose:
+    post:
+      tags: [hosts]
+      summary: Diagnose host
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/usage:
+    get:
+      tags: [billing]
+      summary: Usage
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/invoices:
+    get:
+      tags: [billing]
+      summary: List invoices
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+    post:
+      tags: [billing]
+      summary: Create invoice
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/billing/checkout:
+    post:
+      tags: [billing]
+      summary: Stripe checkout session
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/billing/portal:
+    post:
+      tags: [billing]
+      summary: Stripe customer portal
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/dashboard:
+    get:
+      tags: [dashboard]
+      summary: Dashboard overview
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+components:
+  securitySchemes:
+    AdminTokenAuth:
+      type: apiKey
+      in: header
+      name: X-Admin-Token
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+  schemas:
+    GenericResponse:
+      type: object
+      additionalProperties: true
+    Job:
+      type: object
+      additionalProperties: false
+      properties:
+        ok: { type: boolean }
+        job_id: { type: string, pattern: '^job_[A-Za-z0-9_-]{1,128}$' }
+        status: { type: string, pattern: '^[a-z_]{1,32}$' }
+        message: { type: string, pattern: '^[\s\S]*$' }
+        tenant_id: { type: string, pattern: '^ten_[A-Za-z0-9_-]{1,64}$' }
+
+  /health:
+    get:
+      # kics-scan ignore-line
+      security: []
+      tags: [health]
+      summary: Liveness
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /ready:
+    get:
+      # kics-scan ignore-line
+      security: []
+      tags: [health]
+      summary: Readiness
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+        "503":
+          description: Not ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /openapi.yaml:
+    get:
+      # kics-scan ignore-line
+      security: []
+      tags: [health]
+      summary: OpenAPI document
+      responses:
+        "200":
+          description: YAML
+          content:
+            application/yaml:
+              schema: { type: string, pattern: '^[\s\S]*$' }
+  /docs:
+    get:
+      # kics-scan ignore-line
+      security: []
+      tags: [health]
+      summary: Swagger UI
+      responses:
+        "200":
+          description: HTML
+          content:
+            text/html:
+              schema: { type: string, pattern: '^[\s\S]*$' }
+  /v1/plans:
+    get:
+      # kics-scan ignore-line
+      security: []
+      tags: [billing]
+      summary: List plans
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/tenants:
+    post:
+      tags: [tenants]
+      summary: Create tenant (admin)
+      security: [{ AdminTokenAuth: [] }]
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/me:
+    get:
+      tags: [tenants]
+      summary: Current tenant
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/me/rotate_key:
+    post:
+      tags: [tenants]
+      summary: Rotate API key
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: New key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/me/white-label:
+    patch:
+      tags: [tenants]
+      summary: Update white-label settings
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/generate:
+    post:
+      tags: [generate]
+      summary: Enqueue bot generation
+      security: [{ ApiKeyAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [description]
+              properties:
+                description:
+                  type: string
+                  minLength: 3
+                  maxLength: 20000
+                  pattern: '^[\s\S]{3,20000}$'
+                wait: { type: boolean }
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "402":
+          description: Quota / payment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/jobs:
+    get:
+      tags: [jobs]
+      summary: List jobs
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/jobs/{job_id}:
+    get:
+      tags: [jobs]
+      summary: Get job
+      security: [{ ApiKeyAuth: [] }]
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string, pattern: '^job_[A-Za-z0-9_-]{1,128}$' }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+  /v1/hosts:
+    get:
+      tags: [hosts]
+      summary: Host status list
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/hosts/start:
+    post:
+      tags: [hosts]
+      summary: Start hosted bot
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/hosts/stop:
+    post:
+      tags: [hosts]
+      summary: Stop hosted bot
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/hosts/diagnose:
+    post:
+      tags: [hosts]
+      summary: Diagnose host
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/usage:
+    get:
+      tags: [billing]
+      summary: Usage
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/invoices:
+    get:
+      tags: [billing]
+      summary: List invoices
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+    post:
+      tags: [billing]
+      summary: Create invoice
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/billing/checkout:
+    post:
+      tags: [billing]
+      summary: Stripe checkout session
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/billing/portal:
+    post:
+      tags: [billing]
+      summary: Stripe customer portal
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+  /v1/dashboard:
+    get:
+      tags: [dashboard]
+      summary: Dashboard overview
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+components:
+  securitySchemes:
+    AdminTokenAuth:
+      type: apiKey
+      in: header
+      name: X-Admin-Token
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+  schemas:
+    GenericResponse:
+      type: object
+      additionalProperties: true
+    Job:
+      type: object
+      additionalProperties: false
       properties:
         ok: { type: boolean }
         job_id: { type: string, pattern: '^job_[A-Za-z0-9_-]{1,128}$' }

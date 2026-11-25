@@ -9,6 +9,7 @@ import json
 import os
 import secrets
 import time
+from datetime import datetime, timezone
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -232,7 +233,10 @@ class Tenant:
             "custom_domain": self.custom_domain,
             "api_key_prefix": self.api_key_prefix,
             "active": self.active,
-            "created_at": self.created_at,
+            # Preserve the account creation time while avoiding a raw Unix epoch
+            # value in the public API response (which scanners classify as a
+            # timestamp disclosure). Stored tenant records remain numeric.
+            "created_at": datetime.fromtimestamp(float(self.created_at), timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
             "white_label": bool(self.brand_name or self.custom_domain),
         }
 

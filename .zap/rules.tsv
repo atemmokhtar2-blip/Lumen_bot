@@ -1,3 +1,6 @@
 # ZAP baseline rules — minimal allowlist (official ZAP -c format)
 # 10021 IGNORE
 # 10016 IGNORE
+90005	IGNORE	Sec-Fetch-Dest is browser-only and is not required for API clients.
+10049	IGNORE	API responses deliberately set Cache-Control no-store to prevent caching tenant and service state.
+100001	IGNORE	The only hit is the intentionally enabled /swagger UI, which correctly serves text/html; OpenAPI API routes are JSON and are separately tested.
