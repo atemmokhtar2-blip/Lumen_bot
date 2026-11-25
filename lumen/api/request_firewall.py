@@ -13,6 +13,8 @@ from __future__ import annotations
 import logging
 import re
 
+from aiohttp import web
+
 logger = logging.getLogger("lumen.api.firewall")
 
 # Max URL length (path + query) — refuse probing / buffer abuse
