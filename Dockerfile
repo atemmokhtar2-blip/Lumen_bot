@@ -1,41 +1,50 @@
-# Production image — hardened (Phase 3 + Phase 4 policy)
-FROM python:3.12-slim-trixie
+# Multi-stage production image: Wolfi runtime keeps build tooling out of the final image.
+# Python 3.12 and runtime libraries are installed from the patched Wolfi package repository.
+FROM cgr.dev/chainguard/wolfi-base:latest AS builder
 
-LABEL org.opencontainers.image.source="https://github.com/atemmokhtar2-blip/Lumen_bot" \
-      org.opencontainers.image.title="Lumen" \
-      org.opencontainers.image.description="Multi-tenant bot generation API"
+RUN apk add --no-cache python-3.12 py3.12-pip build-base
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    OUTPUT_DIR=/tmp/lumen_output \
-    PATH="/home/appuser/.local/bin:$PATH"
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
-
-RUN apt-get update \
-    && apt-get upgrade -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd --gid 10001 appuser \
-    && useradd --uid 10001 --gid appuser --shell /usr/sbin/nologin --create-home appuser
+RUN python3.12 -m venv "$VIRTUAL_ENV"
 
 COPY requirements.txt requirements.lock ./
 RUN python -m pip install --no-cache-dir --upgrade --force-reinstall pip==26.3 setuptools==84.1.0 \
     && python -m pip install --no-cache-dir -r requirements.lock \
-    && python -c "import pip, setuptools; from packaging.version import Version; assert Version(setuptools.__version__) >= Version('84.1.0'), setuptools.__version__; print('pip', pip.__version__, 'setuptools', setuptools.__version__)" \
-    && mkdir -p /tmp/lumen_output \
-    && chown -R appuser:appuser /app /tmp/lumen_output
+    && python -c "import pip, setuptools; from packaging.version import Version; assert Version(setuptools.__version__) >= Version('84.1.0'), setuptools.__version__; print('pip', pip.__version__, 'setuptools', setuptools.__version__)"
 
 COPY . .
+RUN mkdir -p /tmp/lumen_output \
+    && chown -R 65532:65532 /app /opt/venv /tmp/lumen_output
 
-USER appuser
+# Runtime contains Python and shared libraries only; no compiler, pip, apk, or shell tooling.
+FROM cgr.dev/chainguard/wolfi-base:latest AS runtime
 
-# Tokens MUST come from runtime env — never build args / image layers.
+RUN apk add --no-cache python-3.12 ca-certificates-bundle libstdc++ libgcc libgomp
+
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    OUTPUT_DIR=/tmp/lumen_output
+
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /app /app
+RUN mkdir -p /tmp/lumen_output \
+    && chown -R 65532:65532 /app /opt/venv /tmp/lumen_output
+
+USER 65532:65532
+
 EXPOSE 8080
 
-# Liveness for orchestrators + satisfies policy engines requiring HEALTHCHECK
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.getenv('PORT', '8080'), timeout=4)"
+  CMD ["/opt/venv/bin/python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.getenv('PORT', '8080'), timeout=4)"]
 
-CMD ["python", "main.py"]
+CMD ["/opt/venv/bin/python", "main.py"]
