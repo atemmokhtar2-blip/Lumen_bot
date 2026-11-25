@@ -11,7 +11,7 @@ on:
       - requirements.txt
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   compile:
@@ -28,6 +28,18 @@ jobs:
           # Keep every existing lock pin unless a new direct security pin
           # or its dependency constraints require a change.
           pip-compile --resolver=backtracking --output-file=requirements.lock requirements.txt
+      - name: Commit refreshed lockfile
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add requirements.lock
+          if git diff --cached --quiet; then
+            echo "Lockfile is already current."
+            exit 0
+          fi
+          git commit -m "security(deps): refresh complete Python lockfile"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
       - uses: actions/upload-artifact@v4
         with:
           name: refreshed-requirements-lock
