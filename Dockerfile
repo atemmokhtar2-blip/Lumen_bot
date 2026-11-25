@@ -57,6 +57,7 @@ RUN rm -rf /usr/local/lib/python3.12/site-packages/pip \
            /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 \
     && /usr/local/bin/python3.12 -c "import importlib.util; assert importlib.util.find_spec('pip') is None"
 
+# No runtime feature needs setuid/setgid helpers; remove these privilege paths.
 RUN find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
     && test -z "$(find / -xdev -type f -perm /6000 -print -quit)" \
     && chown -R 65532:65532 /app /home/appuser /tmp/lumen_output
