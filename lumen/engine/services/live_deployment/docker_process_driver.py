@@ -528,12 +528,11 @@ class DockerProcessDriver(DeploymentProvider):
                     message=f"policy_violation:{pol_exc}",
                 )
             try:
-                # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args
-                # The command is an argv list (shell=False); env-derived values are
-                # constrained by _resource_args/_runtime_args/_apparmor_args,
-                # network.ensure_egress_network, and validate_image_tag above.
+                # This is a validated argv vector (never shell text); every
+                # env/user-derived component is constrained above and the image
+                # tag is validated before execution.
                 proc = subprocess.run(
-                    cmd,
+                    cmd,  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
                     shell=False,
                     capture_output=True,
                     text=True,

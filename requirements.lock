@@ -4,101 +4,242 @@
 #
 #    pip-compile --output-file=requirements.lock requirements.txt
 #
---index-url https://pypi.org/simple/
-
+aiodocker==0.27.0
+    # via -r requirements.txt
 aiohappyeyeballs==2.7.1
     # via aiohttp
-aiohttp==3.14.3
-    # via -r requirements.txt
+aiohttp==3.14.4
+    # via
+    #   -r requirements.txt
+    #   aiodocker
 aiosignal==1.4.0
     # via aiohttp
+aiosqlite==0.22.1
+    # via langgraph-checkpoint-sqlite
 alembic==1.15.2
     # via -r requirements.txt
 annotated-types==0.8.0
     # via pydantic
 anyio==4.14.2
-    # via httpx
-attrs==26.1.0
-    # via aiohttp
-certifi==2026.7.22
     # via
+    #   httpx
+    #   httpx2
+    #   langsmith
+    #   mcp
+    #   sse-starlette
+    #   starlette
+argon2-cffi==23.1.0
+    # via -r requirements.txt
+argon2-cffi-bindings==21.2.0
+    # via argon2-cffi
+attrs==26.1.0
+    # via
+    #   aiohttp
+    #   jsonschema
+    #   referencing
+certifi==2026.10.18
+    # via
+    #   -r requirements.txt
     #   curl-cffi
     #   httpcore
     #   httpx
     #   requests
 cffi==2.1.1
     # via
+    #   argon2-cffi-bindings
     #   cryptography
     #   curl-cffi
 charset-normalizer==3.5.1
     # via requests
 click==8.4.2
-    # via rq
+    # via
+    #   huggingface-hub
+    #   rq
+    #   uvicorn
 cryptography==50.0.0
     # via -r requirements.txt
 curl-cffi==0.15.0
     # via -r requirements.txt
-deprecated==1.3.1
+distro==1.9.0
+    # via langsmith
+dnspython==2.9.2
     # via
-    #   opentelemetry-api
-    #   opentelemetry-exporter-otlp-proto-http
-    #   opentelemetry-semantic-conventions
-dnspython==2.8.0
-    # via pymongo
+    #   -r requirements.txt
+    #   pymongo
+fastembed==0.9.1
+    # via -r requirements.txt
+filelock==4.3.1
+    # via huggingface-hub
+flatbuffers==25.12.19
+    # via onnxruntime
 frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
+fsspec==2026.9.0
+    # via huggingface-hub
 googleapis-common-protos==1.75.0
     # via opentelemetry-exporter-otlp-proto-http
 greenlet==3.5.5
-    # via sqlalchemy
+    # via
+    #   playwright
+    #   sqlalchemy
+grpcio==1.85.4
+    # via qdrant-client
 h11==0.16.0
-    # via httpcore
+    # via
+    #   httpcore
+    #   httpcore2
+    #   uvicorn
+h2==4.4.1
+    # via httpx
+hf-xet==1.8.0
+    # via huggingface-hub
+hpack==4.2.0
+    # via h2
 httpcore==1.0.9
     # via httpx
-httpx==0.28.1
-    # via python-telegram-bot
+httpcore2==2.16.2
+    # via httpx2
+httpx[http2]==0.28.1
+    # via
+    #   huggingface-hub
+    #   langchain-core
+    #   langgraph-sdk
+    #   mcp
+    #   python-telegram-bot
+    #   qdrant-client
+httpx-sse==0.4.3
+    # via mcp
+httpx2==2.16.2
+    # via langsmith
+huggingface-hub==1.33.0
+    # via
+    #   fastembed
+    #   tokenizers
+hyperframe==6.1.0
+    # via h2
 idna==3.19
     # via
     #   anyio
     #   httpx
+    #   httpx2
     #   requests
     #   yarl
-importlib-metadata==8.6.1
-    # via opentelemetry-api
+jedi==0.20.1
+    # via -r requirements.txt
+jsonpatch==1.48
+    # via langchain-core
+jsonpointer==3.12
+    # via jsonpatch
+jsonschema==4.26.0
+    # via mcp
+jsonschema-specifications==2025.9.1
+    # via jsonschema
+langchain-core==1.6.1
+    # via
+    #   -r requirements.txt
+    #   langgraph
+    #   langgraph-checkpoint
+    #   langgraph-prebuilt
+    #   langgraph-sdk
+langchain-protocol==0.0.22
+    # via
+    #   langchain-core
+    #   langgraph-sdk
+langgraph==1.2.14
+    # via
+    #   -r requirements.txt
+    #   temporalio
+langgraph-checkpoint==4.3.2
+    # via
+    #   langgraph
+    #   langgraph-checkpoint-sqlite
+    #   langgraph-prebuilt
+langgraph-checkpoint-sqlite==3.1.2
+    # via -r requirements.txt
+langgraph-prebuilt==1.1.3
+    # via langgraph
+langgraph-sdk==0.4.14
+    # via langgraph
+langsmith==0.16.2
+    # via langchain-core
+loguru==0.7.3
+    # via fastembed
 mako==1.4.1
     # via alembic
 markdown-it-py==4.2.0
     # via rich
 markupsafe==3.0.3
     # via mako
+mcp==1.12.4
+    # via -r requirements.txt
 mdurl==0.1.2
     # via markdown-it-py
-multidict==6.7.1
-    # via
-    #   aiohttp
-    #   yarl
-opentelemetry-api==1.33.1
+mmh3==5.3.1
+    # via fastembed
+multidict==6.9.1
     # via
     #   -r requirements.txt
+    #   aiohttp
+    #   yarl
+nexus-rpc==1.4.0
+    # via temporalio
+numpy==2.5.5
+    # via
+    #   -r requirements.txt
+    #   fastembed
+    #   onnxruntime
+    #   qdrant-client
+    #   rank-bm25
+onnxruntime==1.32.0
+    # via fastembed
+opentelemetry-api==1.45.2
+    # via
+    #   -r requirements.txt
+    #   opentelemetry-exporter-http-transport
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
-opentelemetry-exporter-otlp-proto-common==1.33.1
+opentelemetry-exporter-http-transport[requests]==0.66b2
     # via opentelemetry-exporter-otlp-proto-http
-opentelemetry-exporter-otlp-proto-http==1.33.1
+opentelemetry-exporter-otlp-common==0.66b2
+    # via opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp-proto-common==1.45.2
+    # via opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp-proto-http==1.45.2
     # via -r requirements.txt
-opentelemetry-proto==1.33.1
+opentelemetry-proto==1.45.2
     # via
     #   opentelemetry-exporter-otlp-proto-common
     #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-sdk==1.33.1
+opentelemetry-sdk==1.45.2
     # via
     #   -r requirements.txt
+    #   opentelemetry-exporter-otlp-common
     #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-semantic-conventions==0.54b1
+opentelemetry-semantic-conventions==0.66b2
     # via opentelemetry-sdk
+orjson==3.13.0
+    # via
+    #   langgraph-sdk
+    #   langsmith
+ormsgpack==1.13.1
+    # via langgraph-checkpoint
+packaging==26.4
+    # via
+    #   huggingface-hub
+    #   langchain-core
+    #   langsmith
+    #   onnxruntime
+parso==0.8.7
+    # via jedi
+pillow==13.0.0
+    # via fastembed
+playwright==1.65.2
+    # via -r requirements.txt
+portalocker==4.4.2
+    # via qdrant-client
 prometheus-client==0.21.1
     # via -r requirements.txt
 propcache==0.5.2
@@ -108,30 +249,52 @@ propcache==0.5.2
 protobuf==5.29.6
     # via
     #   googleapis-common-protos
+    #   onnxruntime
     #   opentelemetry-proto
+    #   qdrant-client
+    #   temporalio
 psycopg[binary]==3.2.4
     # via -r requirements.txt
 psycopg-binary==3.2.4
     # via psycopg
+py-rust-stemmers==0.1.8
+    # via fastembed
 pycparser==3.0
     # via cffi
 pydantic==2.10.6
     # via
     #   -r requirements.txt
+    #   langchain-core
+    #   langgraph
+    #   langsmith
+    #   mcp
     #   pydantic-settings
+    #   qdrant-client
 pydantic-core==2.27.2
     # via pydantic
 pydantic-settings==2.7.1
-    # via -r requirements.txt
+    # via
+    #   -r requirements.txt
+    #   mcp
 pygments==2.21.0
     # via rich
-pymongo==4.11.1
+pymongo==4.18.3
     # via -r requirements.txt
 python-dotenv==1.2.2
     # via
     #   -r requirements.txt
     #   pydantic-settings
+python-multipart==0.0.34
+    # via mcp
 python-telegram-bot==22.7
+    # via -r requirements.txt
+pyyaml==6.0.4
+    # via
+    #   huggingface-hub
+    #   langchain-core
+qdrant-client==1.20.0
+    # via -r requirements.txt
+rank-bm25==0.2.2
     # via -r requirements.txt
 rapidfuzz==3.12.1
     # via -r requirements.txt
@@ -139,49 +302,120 @@ redis==5.2.1
     # via
     #   -r requirements.txt
     #   rq
+referencing==0.37.0
+    # via
+    #   jsonschema
+    #   jsonschema-specifications
 requests==2.33.0
     # via
     #   -r requirements.txt
+    #   fastembed
+    #   langsmith
+    #   opentelemetry-exporter-http-transport
     #   opentelemetry-exporter-otlp-proto-http
+    #   requests-toolbelt
+requests-toolbelt==1.0.0
+    # via langsmith
 rich==15.0.0
     # via curl-cffi
+rpds-py==2026.9.1
+    # via
+    #   jsonschema
+    #   referencing
 rq==2.1.0
     # via -r requirements.txt
+sniffio==1.3.1
+    # via langsmith
 sqlalchemy==2.0.40
     # via
     #   -r requirements.txt
     #   alembic
+sqlite-vec==0.1.9
+    # via langgraph-checkpoint-sqlite
+sse-starlette==3.7.1
+    # via mcp
+starlette==1.10.0
+    # via
+    #   mcp
+    #   sse-starlette
+temporalio[langgraph]==1.32.0
+    # via -r requirements.txt
+tenacity==9.2.1
+    # via langchain-core
+tokenizers==0.23.3
+    # via fastembed
+tqdm==4.70.1
+    # via
+    #   fastembed
+    #   huggingface-hub
+tree-sitter==0.27.0
+    # via -r requirements.txt
+tree-sitter-c==0.24.2
+    # via -r requirements.txt
+tree-sitter-cpp==0.23.4
+    # via -r requirements.txt
+tree-sitter-go==0.25.0
+    # via -r requirements.txt
+tree-sitter-java==0.23.5
+    # via -r requirements.txt
+tree-sitter-javascript==0.25.0
+    # via -r requirements.txt
+tree-sitter-python==0.25.0
+    # via -r requirements.txt
+tree-sitter-rust==0.24.2
+    # via -r requirements.txt
+tree-sitter-typescript==0.23.2
+    # via -r requirements.txt
+truststore==0.10.5
+    # via
+    #   httpcore2
+    #   httpx2
+types-protobuf==7.35.1.20261122
+    # via temporalio
 typing-extensions==4.16.0
     # via
     #   aiohttp
     #   aiosignal
     #   alembic
     #   anyio
+    #   grpcio
+    #   httpx2
+    #   huggingface-hub
+    #   langchain-core
+    #   langchain-protocol
+    #   langsmith
+    #   nexus-rpc
+    #   opentelemetry-api
+    #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
     #   psycopg
     #   pydantic
     #   pydantic-core
+    #   referencing
     #   sqlalchemy
-urllib3==2.7.0
-    # via requests
-wrapt==2.3.0
-    # via deprecated
-yarl==1.24.5
+    #   starlette
+    #   temporalio
+urllib3==2.8.0
+    # via
+    #   -r requirements.txt
+    #   qdrant-client
+    #   requests
+uuid-utils==0.19.0
+    # via
+    #   langchain-core
+    #   langsmith
+uvicorn==0.54.0
+    # via mcp
+websockets==17.4
+    # via
+    #   langgraph-sdk
+    #   langsmith
+xxhash==4.1.0
+    # via
+    #   langgraph
+    #   langsmith
+yarl==1.25.1
     # via aiohttp
-zipp==4.1.0
-    # via importlib-metadata
-
-# Phase C/D — API key KDF (from requirements.txt)
-argon2-cffi==23.1.0
-    # via -r requirements.txt
-argon2-cffi-bindings==21.2.0
-    # via argon2-cffi
-
-# Synced from requirements.txt (Phase D lock integrity)
-langgraph==1.2.11
-    # via -r requirements.txt
-langchain-core==1.6.1
-    # via -r requirements.txt
-    # via langgraph
-langgraph-checkpoint-sqlite==3.1.1
-    # via -r requirements.txt
+zstandard==0.25.0
+    # via langsmith

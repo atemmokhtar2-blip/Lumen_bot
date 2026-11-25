@@ -16,9 +16,14 @@ tags:
   - name: hosts
   - name: billing
   - name: dashboard
+security:
+  - ApiKeyAuth: []
 paths:
   /health:
     get:
+      # Public endpoint by design; authentication is intentionally not required.
+      # kics-scan ignore-line
+      security: []
       tags: [health]
       summary: Liveness
       responses:
@@ -29,6 +34,9 @@ paths:
               schema: { $ref: "#/components/schemas/GenericResponse" }
   /ready:
     get:
+      # Public endpoint by design; authentication is intentionally not required.
+      # kics-scan ignore-line
+      security: []
       tags: [health]
       summary: Readiness
       responses:
@@ -44,6 +52,9 @@ paths:
               schema: { $ref: "#/components/schemas/GenericResponse" }
   /openapi.yaml:
     get:
+      # Public endpoint by design; authentication is intentionally not required.
+      # kics-scan ignore-line
+      security: []
       tags: [health]
       summary: OpenAPI document
       responses:
@@ -54,6 +65,9 @@ paths:
               schema: { type: string, pattern: '^[\s\S]*$' }
   /docs:
     get:
+      # Public endpoint by design; authentication is intentionally not required.
+      # kics-scan ignore-line
+      security: []
       tags: [health]
       summary: Swagger UI
       responses:
@@ -64,6 +78,9 @@ paths:
               schema: { type: string, pattern: '^[\s\S]*$' }
   /v1/plans:
     get:
+      # Public endpoint by design; authentication is intentionally not required.
+      # kics-scan ignore-line
+      security: []
       tags: [billing]
       summary: List plans
       responses:

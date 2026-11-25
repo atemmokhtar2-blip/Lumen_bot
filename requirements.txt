@@ -7,11 +7,11 @@ pydantic==2.10.6
 pydantic-settings==2.7.1
 requests==2.33.0
 curl_cffi==0.15.0
-aiohttp==3.14.3
+aiohttp==3.14.4
 
 # Optional: faster fuzzy matching for Layer-1 LU
 rapidfuzz==3.12.1
-pymongo==4.11.1
+pymongo==4.18.3
 
 # Security / hosting foundation
 cryptography==50.0.0
@@ -24,9 +24,9 @@ redis==5.2.1
 rq==2.1.0
 
 # Observability (OpenTelemetry + Prometheus)
-opentelemetry-api==1.33.1
-opentelemetry-sdk==1.33.1
-opentelemetry-exporter-otlp-proto-http==1.33.1
+opentelemetry-api==1.45.2
+opentelemetry-sdk==1.45.2
+opentelemetry-exporter-otlp-proto-http==1.45.2
 prometheus-client==0.21.1
 
 # Database migrations (Alembic + SQLAlchemy engine for migration runner only)
@@ -58,14 +58,21 @@ tree-sitter-c>=0.23.0
 tree-sitter-cpp>=0.23.0
 
 # Official agent orchestration (LangGraph)
-langgraph==1.2.11
+langgraph==1.2.14
 langchain-core==1.6.1
 # Durable cross-process checkpointer — REQUIRED for Human-in-the-Loop resume
 # (generation runs in an RQ worker; confirm runs in the Telegram process).
 # Without this, MemorySaver is process-local and resume silently restarts the graph.
-langgraph-checkpoint-sqlite==3.1.1
+langgraph-checkpoint-sqlite==3.1.2
 
 # Official MCP Python SDK
 mcp>=1.0.0,<2
 aiodocker>=0.22.0
 argon2-cffi==23.1.0
+
+# Security-patched transitive dependencies (pinned for reproducible audits)
+certifi==2026.10.18
+dnspython==2.9.2
+multidict==6.9.1
+urllib3==2.8.0
+# Lock refresh preserves the complete dependency graph and patched advisory pins.

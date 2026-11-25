@@ -63,6 +63,26 @@ def _reset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TBE_MULTI_TENANT", "0")
     monkeypatch.setenv("TBE_REQUIRE_DOCKER", "0")
     monkeypatch.setenv("TBE_ALLOW_LOCAL_PROCESS", "1")
+    # Test-only dual opt-in: permit LocalProcess in isolated single-tenant tests.
+    # Production policy remains unchanged and still requires a strong sandbox.
+    monkeypatch.setenv("TBE_FORCE_LOCAL_PROCESS", "1")
+    # DAST matrices intentionally issue many requests; keep the real limiter
+    # enabled but set a high test-only ceiling so auth assertions are not masked.
+    monkeypatch.setenv("API_IP_RPM", "10000")
+    # Prevent host firewall mutations in API unit tests; production defaults
+    # remain strict and are covered by dedicated sandbox policy tests.
+    monkeypatch.setenv("TBE_EGRESS_MODE", "baseline")
+    monkeypatch.setenv("TBE_EGRESS_IPTABLES", "0")
+    # Give each test an isolated Redis rate-limit namespace and clear the
+    # process singleton so previous localhost traffic cannot leak across tests.
+    monkeypatch.setenv("REDIS_RATE_PREFIX", f"test:{tmp_path.name}:")
+    import lumen.platform.rate_limit as rate_limit_mod
+    rate_limit_mod._LIMITER = None
+    try:
+        from lumen.bootstrap import reset_repositories
+        reset_repositories()
+    except Exception:
+        pass
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_world_class_idor_dast")
     monkeypatch.setenv("ALLOW_DEV_BILLING", "0")
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -348,22 +368,33 @@ def test_idor_usage_invoices_dashboard_no_cross_leak(monkeypatch, tmp_path):
 
 def test_escalation_white_label_cannot_set_plan(monkeypatch, tmp_path):
     async def body(client, ctx):
+        # Inspect persisted domain state, not an optional/public API field:
+        # the public tenant DTO intentionally omits plan_id in credits-only mode.
+        before = ctx["store"].get(ctx["tid_a"])
+        before_plan = before.plan_id
+        before_active = before.active
+        before_key_hash = before.api_key_hash
+
         r = await client.patch(
             "/v1/me/white-label",
             json={
                 "brand_name": "Hack",
                 "plan_id": "enterprise",
-                "active": True,
+                "active": False,
                 "api_key": "stolen",
             },
             headers={"Authorization": f"Bearer {ctx['key_a']}"},
         )
-        # Either forbidden (no white_label plan) or applied only to allow-listed fields
-        if r.status == 200:
-            me = await client.get("/v1/me", headers={"Authorization": f"Bearer {ctx['key_a']}"})
-            data = await me.json()
-            assert data["tenant"]["plan_id"] != "enterprise"
-            assert data["tenant"].get("api_key") is None
+        assert r.status == 200, (r.status, await r.text())
+
+        after = ctx["store"].get(ctx["tid_a"])
+        assert after.plan_id == before_plan
+        assert after.active is before_active
+        assert after.api_key_hash == before_key_hash
+
+        # Public response must never disclose a raw API key.
+        data = await r.json()
+        assert "api_key" not in data.get("tenant", {})
 
     asyncio.run(_world(monkeypatch, tmp_path, body))
 
