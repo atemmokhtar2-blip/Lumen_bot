@@ -25,6 +25,10 @@ env:
   ALLOW_DEV_BILLING: "0"
   API_HOST: 127.0.0.1
   API_PORT: "8765"
+  # ZAP performs hundreds of requests from one localhost IP; keep rate limiting
+  # enabled but raise the test-only ceiling so scans measure app security, not 429s.
+  API_IP_RPM: "5000"
+  API_TENANT_CREATE_RPM: "20"
   DAST_BASE_URL: http://127.0.0.1:8765
   DAST_HEALTH_URL: http://127.0.0.1:8765/health
   ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable
@@ -224,7 +228,7 @@ jobs:
         if: always()
         env:
           DAST_SEED_FILE: ${{ runner.temp }}/dast-tenants.json
-        run: rm -f "$DAST_SEED_FILE" "${{ runner.temp }}/zap-auth.properties" zap-auth-report.json zap-auth-report.html
+        run: rm -f "$DAST_SEED_FILE" "${{ runner.temp }}/zap-auth.properties"
 
       - name: Upload ZAP engine artifacts
         if: always()
@@ -239,6 +243,10 @@ jobs:
             zap-auth-report.html
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Remove temporary DAST reports
+        if: always()
+        run: rm -f zap-baseline-report.json zap-baseline-report.html zap-api-report.json zap-api-report.html zap-auth-report.json zap-auth-report.html
 
       - name: Stop API
         if: always()
