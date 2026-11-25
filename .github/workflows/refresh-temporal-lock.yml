@@ -28,7 +28,7 @@ jobs:
       - name: Compile the updated Temporal dependency chain
         run: |
           python -m pip install --upgrade pip==25.3 pip-tools==7.5.2
-          pip-compile --resolver=backtracking \
+          pip-compile --resolver=backtracking --allow-unsafe \
             --upgrade-package temporalio \
             --output-file=requirements.lock requirements.txt
       - name: Commit lockfile
