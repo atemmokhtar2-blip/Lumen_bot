@@ -16,7 +16,7 @@ def test_github_connection_store_module():
 
 def test_provider_uses_durable_read(monkeypatch, tmp_path):
     monkeypatch.setenv("ENVIRONMENT", "development")
-    monkeypatch.setenv("TBE_TOKEN_SECRET", "unit-test-secret-key-32b!!")
+    monkeypatch.setenv("TBE_TOKEN_SECRET", secrets.token_urlsafe(48))
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
     monkeypatch.delenv("REDIS_URL", raising=False)
     from lumen.engine.services.integrations.connections.github_provider import (
