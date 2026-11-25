@@ -18,7 +18,7 @@ RUN groupadd --gid 10001 appuser \
     && useradd --uid 10001 --gid appuser --shell /usr/sbin/nologin --create-home appuser
 
 COPY requirements.txt requirements.lock ./
-RUN pip install --no-cache-dir --upgrade pip==25.3 \
+RUN pip install --no-cache-dir --upgrade pip==25.3 setuptools==84.2.1 \
     && pip install --no-cache-dir -r requirements.lock \
     && mkdir -p /tmp/lumen_output \
     && chown -R appuser:appuser /app /tmp/lumen_output
