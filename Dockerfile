@@ -28,9 +28,9 @@ RUN apt-get update \
         libc6=2.43-7 \
         libc-bin=2.43-7 \
         libseccomp2=2.6.2-1 \
+        openssl-provider-legacy=3.6.5-1 \
         account-utils=1.4.0-1 \
         account-utils-passwd=1.4.0-1 \
-    && apt-get purge -y --no-install-recommends openssl-provider-legacy \
     && rm -f /etc/apt/sources.list.d/sid.list \
     && dpkg-query -W -f='${Package}=${Version}\\n' \
         ncurses-bin libsqlite3-0 libudev1 libacl1 util-linux perl-base dpkg libc6 libc-bin libseccomp2 account-utils account-utils-passwd \
