@@ -169,6 +169,36 @@ jobs:
           exit-code: "1"
           format: table
 
+      - name: Diagnose Trivy Python package inventory
+        if: always()
+        continue-on-error: true
+        run: |
+          trivy image --exit-code 0 --scanners vuln --format json \
+            --output trivy-image-debug.json \
+            "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("trivy-image-debug.json").read_text())
+          found = 0
+          for result in report.get("Results") or []:
+              for vuln in result.get("Vulnerabilities") or []:
+                  if (vuln.get("PkgName") or "").lower() == "setuptools":
+                      found += 1
+                      print({
+                          "target": result.get("Target"),
+                          "type": result.get("Type"),
+                          "package": vuln.get("PkgName"),
+                          "installed": vuln.get("InstalledVersion"),
+                          "fixed": vuln.get("FixedVersion"),
+                          "path": vuln.get("PkgPath"),
+                          "layer": vuln.get("Layer"),
+                      })
+          if not found:
+              print("No setuptools vulnerabilities in Trivy JSON inventory.")
+          PY
+
       - name: Upload Trivy SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@v4
