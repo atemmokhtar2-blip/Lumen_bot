@@ -28,8 +28,12 @@ jobs:
       # Existing unit paths only — package root on PYTHONPATH
       - name: Generate ephemeral CI-only credentials
         run: |
-          echo "TELEGRAM_BOT_TOKEN=123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> "$GITHUB_ENV"
-          echo "TBE_TOKEN_SECRET=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
+          BOT_TOKEN="123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          echo "::add-mask::$BOT_TOKEN"
+          echo "::add-mask::$TOKEN_SECRET"
+          echo "TELEGRAM_BOT_TOKEN=$BOT_TOKEN" >> "$GITHUB_ENV"
+          echo "TBE_TOKEN_SECRET=$TOKEN_SECRET" >> "$GITHUB_ENV"
 
       - name: Unit suite
         env:
@@ -74,7 +78,9 @@ jobs:
 
       - name: Generate ephemeral integration credentials
         run: |
-          echo "TELEGRAM_BOT_TOKEN=123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> "$GITHUB_ENV"
+          BOT_TOKEN="123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          echo "::add-mask::$BOT_TOKEN"
+          echo "TELEGRAM_BOT_TOKEN=$BOT_TOKEN" >> "$GITHUB_ENV"
           echo "TBE_TOKEN_SECRET=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
 
       - name: Integration with testcontainers
