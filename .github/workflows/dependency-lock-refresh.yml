@@ -35,6 +35,8 @@ jobs:
             --upgrade-package dnspython \
             --upgrade-package urllib3 \
             --upgrade-package mcp \
+            --upgrade-package temporalio \
+            --upgrade-package mako \
             --output-file=requirements.lock requirements.txt
           pip-audit -r requirements.lock
       - uses: actions/upload-artifact@v4
