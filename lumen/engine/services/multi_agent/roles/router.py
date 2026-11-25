@@ -36,9 +36,13 @@ class RouterAgent(Agent):
                     state.user_intent = "chat_or_other"
                     state.capability_id = "chat_or_other"
         except Exception as exc:
-            state.user_intent = "generate_bot"
-            state.capability_id = "generate_bot"
-            state.record(AgentRole.ROUTER, "route_fallback", type(exc).__name__)
+            # Routing failure must never trigger a bot build by accident.
+            # Fall back to an unresolved intent; downstream agent path may
+            # ask for clarification, but no tool or generation is authorized.
+            state.user_intent = "chat_or_other"
+            state.capability_id = "chat_or_other"
+            state.route_params = {}
+            state.record(AgentRole.ROUTER, "route_unavailable", type(exc).__name__)
 
         tool = select_tool(state)
         state.extensions["router"] = {

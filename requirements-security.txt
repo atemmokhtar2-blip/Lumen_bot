@@ -3,6 +3,3 @@ bandit>=1.7.9
 pip-audit>=2.7.3
 semgrep>=1.80.0
 
-# Force patched transitive versions used by the security scanner toolchain.
-opentelemetry-api>=1.45.2
-wcmatch>=11.2

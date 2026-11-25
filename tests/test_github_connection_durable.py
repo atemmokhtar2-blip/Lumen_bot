@@ -1,6 +1,8 @@
 """GitHub connection survives deploy: Mongo source of truth pattern."""
 from __future__ import annotations
 
+import secrets
+
 
 def test_github_connection_store_module():
     from lumen.bot.ui.github_connection_store import (

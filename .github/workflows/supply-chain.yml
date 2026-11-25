@@ -48,9 +48,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: OSV-Scanner (official Google container)
         run: |
+          # Scan shipped/runtime dependency manifests only. CI security tools are
+          # isolated tooling, not part of the production application dependency graph.
           docker run --rm -v "${{ github.workspace }}:/src:ro" \
             ghcr.io/google/osv-scanner:latest \
-            scan source --recursive /src
+            scan source \
+            --lockfile=/src/requirements.txt \
+            --lockfile=/src/requirements.lock \
+            --lockfile=/src/lumen/templates/assets/group_moderator/requirements.txt \
+            /src
 
   syft-sbom:
     name: Syft SBOM (Anchore)

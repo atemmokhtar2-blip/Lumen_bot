@@ -66,7 +66,7 @@ def test_dind_refuses_host_socket(monkeypatch):
 
 def test_firecracker_probe_requires_kvm(monkeypatch):
     with mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._kvm_ok",
         return_value=False,
     ):
         from lumen.engine.services.sandbox_runtime.firecracker_backend import (
@@ -87,13 +87,13 @@ def test_firecracker_probe_requires_jailer_in_prod(monkeypatch):
     Path("/tmp/k").write_text("k")
     Path("/tmp/r").write_text("r")
     with mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._kvm_ok",
         return_value=True,
     ), mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._bin",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._bin",
         return_value="/usr/bin/firecracker",
     ), mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._jailer_bin",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._jailer_bin",
         return_value="",
     ), mock.patch("os.path.isfile", return_value=True):
         from lumen.engine.services.sandbox_runtime.firecracker_backend import (
@@ -118,10 +118,10 @@ def test_firecracker_probe_requires_tap(monkeypatch):
     Path("/tmp/k").write_text("k")
     Path("/tmp/r").write_text("r")
     with mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._kvm_ok",
         return_value=True,
     ), mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._bin",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._bin",
         return_value="/usr/bin/firecracker",
     ), mock.patch("os.path.isfile", return_value=True):
         from lumen.engine.services.sandbox_runtime.firecracker_backend import (
@@ -153,13 +153,13 @@ def test_firecracker_bootargs_token_forbidden_in_production(monkeypatch):
     Path("/tmp/k").write_text("k")
     Path("/tmp/r").write_text("r")
     with mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._kvm_ok",
         return_value=True,
     ), mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._bin",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._bin",
         return_value="/usr/bin/firecracker",
     ), mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._jailer_bin",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._jailer_bin",
         return_value="/usr/bin/jailer",
     ), mock.patch("os.path.isfile", return_value=True):
         from lumen.engine.services.sandbox_runtime.firecracker_backend import (
@@ -174,7 +174,7 @@ def test_firecracker_bootargs_token_forbidden_in_production(monkeypatch):
 
 
 def test_firecracker_stable_uid_range():
-    from lumen.engine.services.sandbox_runtime.firecracker_backend import _stable_vm_ids, _FC_UID_BASE
+    from lumen.engine.services.sandbox_runtime.firecracker_backend.env import _stable_vm_ids, _FC_UID_BASE
     u1, g1 = _stable_vm_ids(42, "fc-42-abc")
     u2, g2 = _stable_vm_ids(42, "fc-42-abc")
     assert u1 == u2 == g1 == g2
@@ -221,7 +221,7 @@ def test_production_forces_firecracker_rejects_docker(monkeypatch):
     monkeypatch.setenv("TBE_MULTI_TENANT", "1")
     monkeypatch.setenv("TBE_SANDBOX_BACKEND", "docker")
     from lumen.engine.services.sandbox_runtime import select as sel
-    with pytest.raises(RuntimeError, match="production_requires_firecracker"):
+    with pytest.raises(RuntimeError, match="production docker requires TBE_DOCKER_ISOLATION_ACK"):
         sel.select_sandbox_backend(require_available=False)
 
 
@@ -302,16 +302,16 @@ def test_fc_require_jailer_forced_in_production(monkeypatch):
     monkeypatch.setenv("TBE_MULTI_TENANT", "1")
     monkeypatch.setenv("TBE_FC_REQUIRE_JAILER", "0")
     monkeypatch.delenv("TBE_FC_ALLOW_NO_JAILER", raising=False)
-    from lumen.engine.services.sandbox_runtime import firecracker_backend as fc
-    assert fc._require_jailer() is True
+    from lumen.engine.services.sandbox_runtime.firecracker_backend.env import _require_jailer
+    assert _require_jailer() is True
 
 
 def test_fc_allow_no_jailer_only_in_dev(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "dev")
     monkeypatch.setenv("TBE_MULTI_TENANT", "0")
     monkeypatch.setenv("TBE_FC_ALLOW_NO_JAILER", "1")
-    from lumen.engine.services.sandbox_runtime import firecracker_backend as fc
-    assert fc._require_jailer() is False
+    from lumen.engine.services.sandbox_runtime.firecracker_backend.env import _require_jailer
+    assert _require_jailer() is False
 
 
 def test_fc_probe_rejects_allow_no_net_in_production(monkeypatch):
@@ -323,13 +323,13 @@ def test_fc_probe_rejects_allow_no_net_in_production(monkeypatch):
     Path("/tmp/k").write_text("k")
     Path("/tmp/r").write_text("r")
     with mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._kvm_ok",
         return_value=True,
     ), mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._bin",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._bin",
         return_value="/usr/bin/firecracker",
     ), mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._jailer_bin",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._jailer_bin",
         return_value="/usr/bin/jailer",
     ), mock.patch("os.path.isfile", return_value=True):
         from lumen.engine.services.sandbox_runtime.firecracker_backend import (
@@ -350,13 +350,13 @@ def test_fc_probe_rejects_token_in_bootargs_in_production(monkeypatch):
     Path("/tmp/k").write_text("k")
     Path("/tmp/r").write_text("r")
     with mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._kvm_ok",
         return_value=True,
     ), mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._bin",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._bin",
         return_value="/usr/bin/firecracker",
     ), mock.patch(
-        "lumen.engine.services.sandbox_runtime.firecracker_backend._jailer_bin",
+        "lumen.engine.services.sandbox_runtime.firecracker_backend.backend._jailer_bin",
         return_value="/usr/bin/jailer",
     ), mock.patch("os.path.isfile", return_value=True), mock.patch(
         "lumen.engine.services.sandbox_runtime.fc_network.ip_available",
@@ -385,7 +385,7 @@ def test_guest_agent_files_exist():
 
 
 def test_inject_guest_agent_into_project(tmp_path):
-    from lumen.engine.services.sandbox_runtime.firecracker_backend import _inject_guest_agent
+    from lumen.engine.services.sandbox_runtime.firecracker_backend.disk import _inject_guest_agent
     proj = tmp_path / "bot"
     proj.mkdir()
     (proj / "main.py").write_text("print(1)\n")
@@ -487,7 +487,7 @@ def test_docker_backend_fails_closed_when_production_policy_import_fails(monkeyp
     original_import = builtins.__import__
 
     def blocked_import(name, *args, **kwargs):
-        if name.endswith(".sandbox_runtime.strict"):
+        if name in {".strict", "lumen.engine.services.sandbox_runtime.strict"}:
             raise ImportError("simulated_policy_unavailable")
         return original_import(name, *args, **kwargs)
 
