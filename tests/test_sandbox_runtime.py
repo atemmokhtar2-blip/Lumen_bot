@@ -474,3 +474,28 @@ def test_load_snapshot_payload_structure(tmp_path, monkeypatch):
     assert body["resume_vm"] is True
     assert body["mem_backend"]["backend_type"] == "File"
     assert "snapshot_path" in body
+
+
+
+def test_docker_backend_fails_closed_when_production_policy_import_fails(monkeypatch):
+    import builtins
+    from lumen.engine.services.sandbox_runtime.docker_backend import DockerSandboxBackend
+    from lumen.engine.services.sandbox_runtime.types import SandboxSpec
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_DOCKER_ISOLATION_ACK", "I_ACCEPT_ISOLATED_DOCKER_NOT_FIRECRACKER")
+    original_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name.endswith(".sandbox_runtime.strict"):
+            raise ImportError("simulated_policy_unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+    with mock.patch.object(DockerSandboxBackend, "probe") as probe:
+        handle = DockerSandboxBackend().start(
+            SandboxSpec(project_path="/tmp/project", bot_token="123:token", user_id=7)
+        )
+        probe.assert_not_called()
+    assert handle.status == "failed"
+    assert handle.message == "docker_policy_check_failed:ImportError"
