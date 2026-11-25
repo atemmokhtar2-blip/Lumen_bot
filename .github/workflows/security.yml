@@ -278,8 +278,12 @@ jobs:
           pip install -r requirements.txt
       - name: Generate ephemeral test credentials
         run: |
-          echo "TELEGRAM_BOT_TOKEN=123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> "$GITHUB_ENV"
-          echo "TBE_TOKEN_SECRET=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
+          BOT_TOKEN="123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          echo "::add-mask::$BOT_TOKEN"
+          echo "::add-mask::$TOKEN_SECRET"
+          echo "TELEGRAM_BOT_TOKEN=$BOT_TOKEN" >> "$GITHUB_ENV"
+          echo "TBE_TOKEN_SECRET=$TOKEN_SECRET" >> "$GITHUB_ENV"
       - name: Ledger + welcome + privilege gates
         env:
           PYTHONPATH: ${{ github.workspace }}
