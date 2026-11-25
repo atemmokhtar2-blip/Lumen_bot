@@ -87,14 +87,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: KICS fail on MEDIUM+
-        uses: checkmarx/kics-github-action@v2
-        with:
-          path: .
-          fail_on: medium
-          output_path: kics-results
-          output_formats: json,sarif
-          enable_comments: false
+      - name: KICS fail on MEDIUM+ (official CLI container)
+        run: |
+          mkdir -p kics-results
+          docker pull checkmarx/kics:v2.2.1
+          docker run --rm \
+            -v "${{ github.workspace }}:/path" \
+            checkmarx/kics:v2.2.1 scan \
+              -p /path \
+              -o /path/kics-results \
+              --report-formats json,sarif \
+              --fail-on medium
       - uses: actions/upload-artifact@v4
         if: always()
         with:

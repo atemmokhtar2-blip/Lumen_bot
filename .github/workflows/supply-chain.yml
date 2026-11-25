@@ -143,14 +143,51 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build production image (hardened Dockerfile)
+        id: build-image
         run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
 
-      - name: Trivy image CVE (CRITICAL/HIGH fail)
+      # Gate on HIGH/CRITICAL only. Trivy Action clears TRIVY_SEVERITY when
+      # producing unrestricted SARIF, so a SARIF gate was incorrectly failing
+      # on MEDIUM/LOW findings despite this workflow's HIGH/CRITICAL threshold.
+      - name: Hardened runtime smoke test (Python 3.12 + privilege boundary)
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/python3.12 \
+            "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" -c '
+          import os, sys, importlib.util
+          assert os.getuid() == 65532, f"unexpected runtime uid: {os.getuid()}"
+          assert sys.version_info[:2] == (3, 12), f"unexpected Python: {sys.version}"
+          assert importlib.util.find_spec("pip") is None, "pip must not ship in runtime"
+          with open("/proc/self/status", encoding="ascii") as status_file:
+              cap_eff = next(line.split()[1] for line in status_file if line.startswith("CapEff:"))
+          assert int(cap_eff, 16) == 0, f"runtime process has effective capabilities: {cap_eff}"
+          import aiohttp, argon2, cryptography, curl_cffi, grpc, onnxruntime
+          import PIL, playwright, psycopg, pymongo, redis, sqlite_vec, telegram
+          import temporalio, tree_sitter
+          print("Hardened Python 3.12 runtime imports OK; uid=65532; CapEff=0")
+          '
+
+      - name: Trivy image CVE gate (CRITICAL/HIGH fail)
         uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          scanners: vuln
+          trivyignores: .trivyignore
           severity: CRITICAL,HIGH
           exit-code: "1"
+          ignore-unfixed: false
+          format: table
+
+      # Keep every severity in Code Scanning, but do not use this report as
+      # the admission decision. The gate above owns the HIGH/CRITICAL policy.
+      - name: Trivy image full SARIF report (all severities)
+        if: always() && steps.build-image.outcome == 'success'
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          scanners: vuln
+          trivyignores: .trivyignore
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: "0"
           ignore-unfixed: false
           format: sarif
           output: trivy-image.sarif

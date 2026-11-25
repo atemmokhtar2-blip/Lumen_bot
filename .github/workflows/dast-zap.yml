@@ -28,6 +28,8 @@ env:
   # ZAP performs hundreds of requests from one localhost IP; keep rate limiting
   # enabled but raise the test-only ceiling so scans measure app security, not 429s.
   API_IP_RPM: "5000"
+  API_ADMIN_AUTH_RPM: "5000"
+  API_ADMIN_FAIL_LIMIT: "5000"
   API_TENANT_CREATE_RPM: "20"
   DAST_BASE_URL: http://127.0.0.1:8765
   DAST_HEALTH_URL: http://127.0.0.1:8765/health
@@ -155,14 +157,14 @@ jobs:
             -v "${{ github.workspace }}:/zap/wrk:rw" \
             -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
             "$ZAP_IMAGE" \
-            zap-baseline.py -t "$DAST_HEALTH_URL" -a \
+            zap-baseline.py -t "$DAST_HEALTH_URL" -a -I \
               -c /zap/rules/rules.tsv \
               -J zap-baseline-report.json \
               -r zap-baseline-report.html
           code=$?
           echo "zap-baseline exit=$code"
           test -f zap-baseline-report.json || { echo "missing ZAP baseline JSON report"; exit 1; }
-          # World-class: fail on warnings (1) and failures (2+)
+          # -I keeps low-risk warnings visible in JSON; the explicit parser below blocks MEDIUM/HIGH.
           if [ "$code" -ne 0 ]; then exit $code; fi
 
       - name: ZAP API scan — real engine + OpenAPI
@@ -172,7 +174,7 @@ jobs:
             -v "${{ github.workspace }}:/zap/wrk:rw" \
             -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
             "$ZAP_IMAGE" \
-            zap-api-scan.py -t "$DAST_BASE_URL/openapi.yaml" -f openapi -a \
+            zap-api-scan.py -t "$DAST_BASE_URL/openapi.yaml" -f openapi -a -I \
               -c /zap/rules/rules.tsv \
               -J zap-api-report.json \
               -r zap-api-report.html
@@ -203,7 +205,7 @@ jobs:
             -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
             -v "$ZAP_AUTH_CONFIG:/zap/auth.properties:ro" \
             "$ZAP_IMAGE" \
-            zap-baseline.py -t "$DAST_BASE_URL/v1/me" -a \
+            zap-baseline.py -t "$DAST_BASE_URL/v1/me" -a -I \
               -c /zap/rules/rules.tsv \
               -J zap-auth-report.json \
               -r zap-auth-report.html \
