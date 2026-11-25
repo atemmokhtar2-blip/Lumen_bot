@@ -38,6 +38,12 @@ RUN apk add --no-cache \
     libgcc=16.2.0-r5 \
     libgomp=16.2.0-r5
 
+# Python ships an unused ensurepip wheel containing setuptools 70.3.0.
+# The runtime uses the isolated /opt/venv; remove the stale bootstrap wheel so
+# scanners do not report an exploitable package that is not used or installed.
+RUN find /usr/lib/python3.12 -type f -name 'setuptools-*.whl' -delete \
+    && python3.12 -c "import setuptools; assert setuptools.__version__.startswith('84.'), setuptools.__version__"
+
 ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
