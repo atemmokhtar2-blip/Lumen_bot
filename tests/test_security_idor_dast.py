@@ -69,6 +69,20 @@ def _reset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # DAST matrices intentionally issue many requests; keep the real limiter
     # enabled but set a high test-only ceiling so auth assertions are not masked.
     monkeypatch.setenv("API_IP_RPM", "10000")
+    # Prevent host firewall mutations in API unit tests; production defaults
+    # remain strict and are covered by dedicated sandbox policy tests.
+    monkeypatch.setenv("TBE_EGRESS_MODE", "baseline")
+    monkeypatch.setenv("TBE_EGRESS_IPTABLES", "0")
+    # Give each test an isolated Redis rate-limit namespace and clear the
+    # process singleton so previous localhost traffic cannot leak across tests.
+    monkeypatch.setenv("REDIS_RATE_PREFIX", f"test:{tmp_path.name}:")
+    import lumen.platform.rate_limit as rate_limit_mod
+    rate_limit_mod._LIMITER = None
+    try:
+        from lumen.bootstrap import reset_repositories
+        reset_repositories()
+    except Exception:
+        pass
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_world_class_idor_dast")
     monkeypatch.setenv("ALLOW_DEV_BILLING", "0")
     monkeypatch.delenv("DATABASE_URL", raising=False)
