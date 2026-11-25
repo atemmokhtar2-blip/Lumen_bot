@@ -234,12 +234,13 @@ def test_llm_budget_reservations_are_atomic_across_workers(monkeypatch):
         assert float(redis.get(usd_key) or 0) == pytest.approx(workers * 0.01, abs=0.000001)
 
         # Negative adjustments must never refund or decrement a spend budget.
-        ok, _ = check_tenant_llm_budget(
+        ok, reason = check_tenant_llm_budget(
             tenant_id,
             add_tokens=-1000,
             add_usd=-10.0,
         )
-        assert ok
+        assert not ok
+        assert "cap_exceeded" in reason
         assert int(redis.get(token_key) or 0) == workers * 10
         assert float(redis.get(usd_key) or 0) == pytest.approx(workers * 0.01, abs=0.000001)
     finally:
