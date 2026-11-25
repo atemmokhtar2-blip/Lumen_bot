@@ -183,6 +183,18 @@ def test_matrix_tenant_key_never_admin(monkeypatch, tmp_path):
     asyncio.run(_world(monkeypatch, tmp_path, body))
 
 
+def test_budget_backend_required_for_production(monkeypatch):
+    monkeypatch.setenv('ENVIRONMENT', 'production')
+    monkeypatch.delenv('REDIS_URL', raising=False)
+    monkeypatch.delenv('JOB_REDIS_URL', raising=False)
+    from lumen.platform import runtime_config
+    from lumen.platform.rate_limit import check_tenant_llm_budget
+    monkeypatch.setattr(runtime_config, 'is_dev', lambda: False)
+    allowed, reason = check_tenant_llm_budget('budget-production-no-redis', add_tokens=1, add_usd=0.001)
+    assert allowed is False
+    assert reason == 'llm_budget_backend_required'
+
+
 def test_llm_budget_reservations_are_atomic_across_workers(monkeypatch):
     redis_url = (os.getenv("REDIS_URL") or "").strip()
     if not redis_url:
