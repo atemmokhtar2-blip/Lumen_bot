@@ -25,19 +25,9 @@ jobs:
         run: python -m pip install --upgrade pip pip-tools
       - name: Resolve only security-related upgrades
         run: |
-          pip-compile --resolver=backtracking --output-file=requirements.lock \
-            --upgrade-package aiohttp \
-            --upgrade-package multidict \
-            --upgrade-package certifi \
-            --upgrade-package dnspython \
-            --upgrade-package opentelemetry-api \
-            --upgrade-package opentelemetry-sdk \
-            --upgrade-package opentelemetry-exporter-otlp-proto-http \
-            --upgrade-package urllib3 \
-            --upgrade-package pymongo \
-            --upgrade-package langgraph \
-            --upgrade-package langgraph-checkpoint-sqlite \
-            requirements.txt
+          # Keep every existing lock pin unless a new direct security pin
+          # or its dependency constraints require a change.
+          pip-compile --resolver=backtracking --output-file=requirements.lock requirements.txt
       - uses: actions/upload-artifact@v4
         with:
           name: refreshed-requirements-lock
