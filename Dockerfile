@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir --upgrade pip==25.3 setuptools==84.2.1 \
     && mkdir -p /tmp/lumen_output \
     && chown -R appuser:appuser /app /tmp/lumen_output
 
-COPY --chown=appuser:appuser . .
+COPY . .
 
 USER appuser
 
