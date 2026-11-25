@@ -12,6 +12,9 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
+import os
+import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -178,6 +181,57 @@ def test_matrix_tenant_key_never_admin(monkeypatch, tmp_path):
                     assert r.status in (401, 403), (key[:8], tid, tmpl, r.status)
 
     asyncio.run(_world(monkeypatch, tmp_path, body))
+
+
+def test_llm_budget_reservations_are_atomic_across_workers(monkeypatch):
+    redis_url = (os.getenv("REDIS_URL") or "").strip()
+    if not redis_url:
+        pytest.skip("Redis service is required for cross-worker budget test")
+
+    monkeypatch.setenv("TENANT_LLM_TOKEN_DAILY_CAP", "100")
+    monkeypatch.setenv("TENANT_LLM_USD_DAILY_CAP", "0.05")
+
+    from lumen.platform.redis_client import connect_redis_url
+    from lumen.platform.rate_limit import check_tenant_llm_budget
+
+    redis = connect_redis_url(redis_url, decode_responses=True)
+    tenant_id = f"atomic-budget-{secrets.token_hex(8)}"
+    day = time.strftime("%Y%m%d", time.gmtime())
+    token_key = f"llm_tok:{tenant_id}:{day}"
+    usd_key = f"llm_usd:{tenant_id}:{day}"
+    redis.delete(token_key, usd_key)
+
+    workers = 30
+    barrier = threading.Barrier(workers)
+
+    def reserve():
+        barrier.wait(timeout=10)
+        return check_tenant_llm_budget(
+            tenant_id,
+            add_tokens=10,
+            add_usd=0.01,
+        )
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(lambda _: reserve(), range(workers)))
+
+        allowed = [result for result in results if result[0]]
+        assert len(allowed) == 5, f"expected exactly 5 atomic reservations, got {len(allowed)}"
+        assert int(redis.get(token_key) or 0) == 50
+        assert float(redis.get(usd_key) or 0) == pytest.approx(0.05, abs=0.000001)
+
+        # Negative adjustments must never refund or decrement a spend budget.
+        ok, _ = check_tenant_llm_budget(
+            tenant_id,
+            add_tokens=-1000,
+            add_usd=-10.0,
+        )
+        assert ok
+        assert int(redis.get(token_key) or 0) == 50
+        assert float(redis.get(usd_key) or 0) == pytest.approx(0.05, abs=0.000001)
+    finally:
+        redis.delete(token_key, usd_key)
 
 
 # ── /v1/me isolation ───────────────────────────────────────────────────────
