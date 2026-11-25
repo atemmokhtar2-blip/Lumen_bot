@@ -53,42 +53,6 @@ async def generate(request: web.Request) -> web.Response:
     """
     tenant = require_tenant(request)
 
-    # ROOT FIX: refuse generation when no strong sandbox (never host-execute untrusted code).
-    try:
-        from lumen.engine.services.isolation_policy import (
-            decide_isolation,
-            strong_sandbox_available,
-        )
-        decision = decide_isolation()
-        if decision.require_strong_isolation:
-            ok_sb, sb_reason = strong_sandbox_available()
-            if not ok_sb:
-                return web.json_response(
-                    {
-                        "ok": False,
-                        "error": "sandbox_unavailable",
-                    },
-                    status=503,
-                    headers={"Retry-After": "30"},
-                )
-    except Exception as exc:
-        # Never return exception types/names to clients (info disclosure).
-        import logging
-        import uuid
-        rid = (request.headers.get("X-Request-ID") or "").strip() or uuid.uuid4().hex[:16]
-        logging.getLogger("lumen.api.generate").exception(
-            "sandbox_check_failed request_id=%s", rid
-        )
-        return web.json_response(
-            {
-                "ok": False,
-                "error": "internal_error",
-                "request_id": rid,
-            },
-            status=503,
-            headers={"Retry-After": "30"},
-        )
-
     # Strict per-tenant generate rate limit (defense in depth beyond plan quotas)
     lim = get_rate_limiter()
     if not lim.allow(f"generate:{tenant.tenant_id}", limit=max(1, _GEN_RPM), window_sec=60.0):
@@ -139,6 +103,42 @@ async def generate(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(
             text=f'{{"error":"description_too_long","max":{_MAX_DESCRIPTION}}}',
             content_type="application/json",
+        )
+
+    # ROOT FIX: refuse generation when no strong sandbox (never host-execute untrusted code).
+    try:
+        from lumen.engine.services.isolation_policy import (
+            decide_isolation,
+            strong_sandbox_available,
+        )
+        decision = decide_isolation()
+        if decision.require_strong_isolation:
+            ok_sb, sb_reason = strong_sandbox_available()
+            if not ok_sb:
+                return web.json_response(
+                    {
+                        "ok": False,
+                        "error": "sandbox_unavailable",
+                    },
+                    status=503,
+                    headers={"Retry-After": "30"},
+                )
+    except Exception as exc:
+        # Never return exception types/names to clients (info disclosure).
+        import logging
+        import uuid
+        rid = (request.headers.get("X-Request-ID") or "").strip() or uuid.uuid4().hex[:16]
+        logging.getLogger("lumen.api.generate").exception(
+            "sandbox_check_failed request_id=%s", rid
+        )
+        return web.json_response(
+            {
+                "ok": False,
+                "error": "internal_error",
+                "request_id": rid,
+            },
+            status=503,
+            headers={"Retry-After": "30"},
         )
 
     wait = str(body.get("wait") or request.rel_url.query.get("wait") or "").lower() in {
