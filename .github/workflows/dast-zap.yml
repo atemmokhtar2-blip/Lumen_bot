@@ -164,7 +164,7 @@ jobs:
           code=$?
           echo "zap-baseline exit=$code"
           test -f zap-baseline-report.json || { echo "missing ZAP baseline JSON report"; exit 1; }
-          # World-class: fail on warnings (1) and failures (2+)
+          # -I keeps low-risk warnings visible in JSON; the explicit parser below blocks MEDIUM/HIGH.
           if [ "$code" -ne 0 ]; then exit $code; fi
 
       - name: ZAP API scan — real engine + OpenAPI
