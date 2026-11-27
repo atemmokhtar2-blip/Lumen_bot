@@ -53,7 +53,9 @@ def test_interrupt_creates_pending_action(tmp_path):
     pending = (paused.extensions or {}).get("pending_action") or {}
     assert pending.get("tool") == "langgraph_plan_approve"
     assert pending.get("action_id")
-    assert pending.get("confirm_token")
+    assert "confirm_token" not in pending
+    from lumen.engine.services.multi_agent.hitl import confirmation_token_for_state
+    assert len(confirmation_token_for_state(paused)) == 24
     assert "تأكيد" in (paused.final_message or "")
 
 
