@@ -1,89 +1,95 @@
-"""Durable SqliteSaver HITL + Telegram pending_action wire."""
+"""Deterministic local LangGraph HITL persistence tests (no external LLM provider)."""
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
 pytest.importorskip("langgraph")
 
-from lumen.engine.services.multi_agent.state import AgentState, AgentStatus
-from lumen.engine.services.multi_agent import langgraph_pipeline as lgp
+
+class ApprovalState(TypedDict, total=False):
+    decision: str
+
+
+def _approval_node(_state: ApprovalState) -> dict:
+    from langgraph.types import interrupt
+
+    decision = interrupt({"type": "approve_plan", "message": "Approve test plan?"})
+    return {"decision": str(decision)}
+
+
+def _approval_graph(checkpointer):
+    from langgraph.graph import END, START, StateGraph
+
+    graph = StateGraph(ApprovalState)
+    graph.add_node("approval", _approval_node)
+    graph.add_edge(START, "approval")
+    graph.add_edge("approval", END)
+    return graph.compile(checkpointer=checkpointer)
 
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
+    monkeypatch.setenv("ENVIRONMENT", "dev")
     monkeypatch.setenv("MULTI_AGENT_LANGGRAPH_HITL", "1")
     monkeypatch.setenv("MULTI_AGENT_CHECKPOINT", "1")
     monkeypatch.setenv("LANGGRAPH_CHECKPOINT_PATH", str(tmp_path / "ckpt.sqlite"))
     monkeypatch.setenv("MULTI_AGENT_MAX_ATTEMPTS", "1")
-    # reset singleton so new path is used
-    lgp._SHARED_CHECKPOINTER = None
+    from lumen.engine.services.multi_agent.langgraph_pipeline import flags
+
+    flags._SHARED_CHECKPOINTER = None
+    yield
+    flags.close_shared_checkpointer()
 
 
 def test_sqlite_checkpointer_preferred(tmp_path, monkeypatch):
     monkeypatch.setenv("LANGGRAPH_CHECKPOINT_PATH", str(tmp_path / "ckpt.sqlite"))
-    lgp._SHARED_CHECKPOINTER = None
-    cp = lgp._shared_checkpointer()
-    assert cp is not None
-    name = type(cp).__name__
-    assert name in {"SqliteSaver", "MemorySaver"}
-    # Prefer sqlite when package available
-    try:
-        from langgraph.checkpoint.sqlite import SqliteSaver
-        assert isinstance(cp, SqliteSaver)
-        assert (tmp_path / "ckpt.sqlite").exists() or True  # file may create on write
-    except ImportError:
-        pytest.skip("sqlite saver not installed")
+    from lumen.engine.services.multi_agent.langgraph_pipeline.flags import _shared_checkpointer
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    checkpointer = _shared_checkpointer()
+    assert isinstance(checkpointer, SqliteSaver)
+    assert (tmp_path / "ckpt.sqlite").parent.exists()
 
 
-def test_interrupt_creates_pending_action(tmp_path):
-    state = AgentState(
-        user_id=7,
-        user_text="build a calculator bot",
-        capability_id="generate_bot",
-        status=AgentStatus.PENDING.value,
+def test_interrupt_creates_pending_action_without_persisting_raw_token():
+    from lumen.engine.services.multi_agent.blackboard import MemoryBlackboard
+    from lumen.engine.services.multi_agent.hitl import (
+        confirmation_token_for_state,
+        request_confirmation,
     )
-    state.extensions = {"work_dir": str(tmp_path)}
-    paused = lgp.run_langgraph_pipeline(
-        state, context={"work_dir": str(tmp_path)}, thread_id="durable-1"
-    )
-    assert (paused.extensions or {}).get("langgraph_interrupt") is True
-    pending = (paused.extensions or {}).get("pending_action") or {}
-    assert pending.get("tool") == "langgraph_plan_approve"
-    assert pending.get("action_id")
-    assert "confirm_token" not in pending
-    from lumen.engine.services.multi_agent.hitl import confirmation_token_for_state
-    assert len(confirmation_token_for_state(paused)) == 24
-    assert "تأكيد" in (paused.final_message or "")
+    from lumen.engine.services.multi_agent.state import AgentState
 
-
-def test_resume_after_confirm_path(tmp_path):
-    state = AgentState(
-        user_id=8,
-        user_text="bot",
-        capability_id="generate_bot",
-        status=AgentStatus.PENDING.value,
-    )
-    state.extensions = {"work_dir": str(tmp_path)}
-    paused = lgp.run_langgraph_pipeline(
-        state, context={"work_dir": str(tmp_path)}, thread_id="durable-2"
-    )
-    pending = (paused.extensions or {}).get("pending_action") or {}
-    from lumen.engine.services.multi_agent.hitl import confirm_action
-    from lumen.engine.services.multi_agent.orchestrator import continue_after_confirm
-    from lumen.engine.services.multi_agent.blackboard import get_blackboard
-
-    board = get_blackboard()
-    board.put(paused)
-    ok, st, reason = confirm_action(
-        paused.state_id,
-        pending["action_id"],
-        user_id=8,
-        confirm_token=pending["confirm_token"],
+    state = AgentState(user_id=7, user_text="build a calculator bot")
+    board = MemoryBlackboard()
+    pending = request_confirmation(
+        state,
+        tool="langgraph_plan_approve",
+        params={"goal": "calculator bot"},
         board=board,
     )
-    assert ok, reason
-    resumed = continue_after_confirm(paused.state_id, user_id=8, work_dir=str(tmp_path), board=board)
-    assert (resumed.extensions or {}).get("langgraph_interrupt") in {False, None}
+    persisted = board.get(state.state_id)
+    assert persisted is not None
+    stored = persisted.extensions["pending_action"]
+    assert stored.get("tool") == "langgraph_plan_approve"
+    assert stored.get("action_id") == pending.action_id
+    assert "confirm_token" not in stored
+    assert confirmation_token_for_state(persisted) == pending.confirm_token
+    assert pending.confirm_token not in (persisted.final_message or "")
+
+
+def test_langgraph_interrupt_resumes_with_same_local_checkpointer():
+    from langgraph.types import Command
+
+    from lumen.engine.services.multi_agent.langgraph_pipeline.flags import _shared_checkpointer
+
+    thread_id = "local-hitl-resume-test"
+    app = _approval_graph(_shared_checkpointer())
+    config = {"configurable": {"thread_id": thread_id}}
+
+    paused = app.invoke({}, config=config)
+    assert paused.get("__interrupt__")
+
+    resumed = app.invoke(Command(resume="approved"), config=config)
+    assert resumed.get("decision") == "approved"
