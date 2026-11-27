@@ -157,3 +157,16 @@ def test_keyboard_builds_hitl_buttons():
     texts = {b.text for b in rows[0]}
     assert any("تأكيد" in t for t in texts)
     assert any("رفض" in t for t in texts)
+
+
+def test_other_user_cannot_hydrate_pending_confirmation_token(board):
+    from lumen.bot.multi_agent_bridge import try_handle_hitl_message
+
+    st, _pending = _make_pending_state(user_id=311)
+    user_data = {"multi_agent_state_id": st.state_id}
+
+    handled, _reply = try_handle_hitl_message(
+        "تأكيد", user_id=312, user_data=user_data
+    )
+    assert handled is True
+    assert "multi_agent_pending" not in user_data
