@@ -292,6 +292,24 @@ def max_projects_per_user() -> int:
         return 50
 
 
+def get_tenant_sandbox(tenant_id: str, base_dir: str | Path | None = None) -> UserSandbox:
+    """Collision-resistant B2B tenant workspace, separate from numeric user IDs.
+
+    The full SHA-256 digest is part of the path; the shortened numeric ID is
+    retained only for existing quota APIs and is never used as the directory key.
+    """
+    import hashlib
+
+    tenant = str(tenant_id or "").strip()
+    if not tenant or len(tenant) > 256:
+        raise ValueError("invalid_tenant_id")
+    digest = hashlib.sha256(tenant.encode("utf-8")).hexdigest()
+    base = Path(base_dir or os.getenv("OUTPUT_DIR") or _cm_default_output_dir()).resolve()
+    uid = int(digest[:16], 16)
+    root = base / "tenants" / digest[:2] / digest[2:4] / digest
+    return UserSandbox(user_id=uid, root=root).ensure()
+
+
 def get_user_sandbox(user_id: int, base_dir: str | Path | None = None) -> UserSandbox:
     base = Path(base_dir or os.getenv("OUTPUT_DIR") or _cm_default_output_dir()).resolve()
     uid = int(user_id or 0)
@@ -457,6 +475,7 @@ def allocate_fallback_workdir(user_id: int = 0) -> Path:
 __all__ = [
     "UserSandbox",
     "get_user_sandbox",
+    "get_tenant_sandbox",
     "clean_child_env",
     "write_token_file",
     "shard_for_user",
