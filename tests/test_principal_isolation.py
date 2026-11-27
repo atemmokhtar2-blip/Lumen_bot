@@ -4,6 +4,7 @@ import json
 
 from lumen.engine.services.multi_agent.blackboard import FileBlackboard, MemoryBlackboard
 from lumen.engine.services.multi_agent.state import AgentState
+from lumen.engine.services.user_sandbox import get_tenant_sandbox
 
 
 def test_agent_state_principal_round_trip_and_legacy_default() -> None:
@@ -54,3 +55,14 @@ def test_file_blackboard_scopes_principals_and_reads_legacy_index(tmp_path) -> N
     }
     index_path.write_text(json.dumps(index), encoding="utf-8")
     assert board.latest_for_user(89).state_id == legacy.state_id
+
+
+
+def test_tenant_sandbox_uses_full_tenant_digest_not_numeric_user_id(tmp_path) -> None:
+    first = get_tenant_sandbox("tenant-alpha", tmp_path)
+    second = get_tenant_sandbox("tenant-beta", tmp_path)
+
+    assert first.root != second.root
+    assert first.root.parts[-1] != second.root.parts[-1]
+    assert first.root.is_relative_to(tmp_path / "tenants")
+    assert second.root.is_relative_to(tmp_path / "tenants")
