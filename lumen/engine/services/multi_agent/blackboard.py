@@ -46,6 +46,12 @@ class MemoryBlackboard(BlackboardStore):
 
     def put(self, state: AgentState) -> AgentState:
         with self._lock:
+            existing = self._data.get(state.state_id)
+            if existing is not None and (
+                existing.principal_id != state.principal_id
+                or int(existing.user_id or 0) != int(state.user_id or 0)
+            ):
+                raise PermissionError("agent_state_owner_mismatch")
             state.touch()
             self._data[state.state_id] = state
             return state
@@ -107,6 +113,12 @@ class FileBlackboard(BlackboardStore):
 
     def put(self, state: AgentState) -> AgentState:
         with self._lock:
+            existing = self.get(state.state_id)
+            if existing is not None and (
+                existing.principal_id != state.principal_id
+                or int(existing.user_id or 0) != int(state.user_id or 0)
+            ):
+                raise PermissionError("agent_state_owner_mismatch")
             state.touch()
             path = self._path(state.state_id)
             path.write_text(json.dumps(state.to_dict(), ensure_ascii=False, indent=0), encoding="utf-8")
@@ -338,11 +350,13 @@ class LayeredBlackboard(BlackboardStore):
         self.file = file or FileBlackboard()
 
     def put(self, state: AgentState) -> AgentState:
-        self.memory.put(state)
         try:
             self.file.put(state)
+        except PermissionError:
+            raise
         except Exception:
             logger.exception("durable blackboard put failed")
+        self.memory.put(state)
         return state
 
     def get(self, state_id: str) -> Optional[AgentState]:
