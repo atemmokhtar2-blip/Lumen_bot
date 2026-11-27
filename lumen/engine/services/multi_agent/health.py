@@ -20,6 +20,9 @@ def _check_blackboard() -> dict[str, Any]:
         board.put(probe)
         got = board.get(probe.state_id)
         ok = got is not None and got.state_id == probe.state_id
+        cleanup = getattr(board, "delete", None)
+        if callable(cleanup):
+            cleanup(probe.state_id)
         return {"ok": ok, "latency_ms": int((time.time() - t0) * 1000)}
     except Exception as exc:
         return {"ok": False, "error": type(exc).__name__, "latency_ms": int((time.time() - t0) * 1000)}
@@ -57,13 +60,23 @@ def health_snapshot(*, deep: bool = True) -> dict[str, Any]:
     ok = bool(checks["agents"].get("ok"))
     if deep:
         ok = ok and bool(checks.get("blackboard", {}).get("ok")) and bool(checks.get("output_dir", {}).get("ok"))
+    try:
+        from lumen.platform.runtime_config import is_dev
+
+        durability = (
+            "local_sqlite_or_memory_development"
+            if is_dev()
+            else "postgresql_checkpoints_and_blackboard"
+        )
+    except Exception:
+        durability = "unknown"
     return {
         "ok": ok,
         "ready": ok,
         "subsystem": "multi_agent",
         "checks": checks,
         "metrics": metrics_snapshot(),
-        "durability": "langgraph_sqlite + temporal_optional",
+        "durability": durability,
     }
 
 

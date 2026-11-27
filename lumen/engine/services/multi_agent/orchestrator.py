@@ -281,7 +281,13 @@ def get_state(state_id: str) -> Optional[AgentState]:
 
 
 def latest_for_user(user_id: int) -> Optional[AgentState]:
-    return get_blackboard().latest_for_user(int(user_id or 0))
+    uid = int(user_id or 0)
+    return (get_blackboard().latest_for_principal(f"telegram:{uid}")
+            or get_blackboard().latest_for_principal(f"legacy:user:{uid}"))
+
+
+def latest_for_principal(principal_id: str) -> Optional[AgentState]:
+    return get_blackboard().latest_for_principal(principal_id)
 
 
 def orchestrate_generate(
@@ -289,6 +295,7 @@ def orchestrate_generate(
     work_dir: str | Path,
     *,
     user_id: int = 0,
+    principal_id: str | None = None,
     preferred_keys: Optional[list[str]] = None,
     spec_request: Optional[str] = None,
     registry: AgentRegistry | None = None,
@@ -361,12 +368,13 @@ def orchestrate_generate(
 
     inside = (os.environ.get("LUMEN_INSIDE_TEMPORAL_ACTIVITY") or "").strip().lower() in {"1", "true", "yes"}
     try:
-        from .temporal_client_run import run_generate_via_temporal, temporal_configured
-        if temporal_configured() and not inside and (os.environ.get("LUMEN_GENERATE_VIA_TEMPORAL") or "1").strip().lower() not in {"0", "false", "no"}:
+        from .temporal_client_run import run_generate_via_temporal, temporal_generation_enabled
+        if temporal_generation_enabled() and not inside:
             tr = run_generate_via_temporal(
                 request=request or "",
                 work_dir=str(work),
                 user_id=int(user_id or 0),
+                principal_id=str(principal_id or f"telegram:{int(user_id or 0)}"),
                 preferred_keys=list(preferred_keys or []),
             )
             result = tr.get("result") or tr
@@ -398,6 +406,7 @@ def orchestrate_generate(
     registry = registry or get_registry()
     state = AgentState(
         user_id=int(user_id or 0),
+        principal_id=str(principal_id or f"telegram:{int(user_id or 0)}"),
         user_text=_safe_user_text(request),
         spec_request=(spec_request or request or ""),
         preferred_keys=list(preferred_keys or []),
@@ -449,6 +458,14 @@ def orchestrate_generate(
     if not success and not awaiting and out.final_message:
         errors.append(out.final_message[:500])
     pending = (out.extensions or {}).get("pending_action") or {}
+    confirm_token = ""
+    if awaiting:
+        try:
+            from .hitl import confirmation_token_for_state
+
+            confirm_token = confirmation_token_for_state(out)
+        except Exception:
+            logger.exception("HITL confirmation token derivation failed")
     return GenerationResult(
         success=success or awaiting,  # awaiting counts as handled success path
         project_path=out.generated_path or None,
@@ -484,7 +501,7 @@ def orchestrate_generate(
             "hitl_status": (out.extensions or {}).get("hitl_status"),
             "langgraph_thread_id": (out.extensions or {}).get("langgraph_thread_id"),
             "pending_action_id": pending.get("action_id"),
-            "confirm_token": pending.get("confirm_token"),
+            "confirm_token": confirm_token,
             "awaiting_hitl": awaiting,
             # Engine → Telegram presentation bridge (Rich tables)
             "presentation": (out.extensions or {}).get("presentation"),
@@ -572,6 +589,7 @@ def resume_after_confirm(
     action_id: str,
     *,
     user_id: int = 0,
+    principal_id: str | None = None,
     confirm_token: str = "",
     work_dir: str | Path | None = None,
     board: BlackboardStore | None = None,
@@ -579,6 +597,16 @@ def resume_after_confirm(
     """Confirm HITL action (action_id + token) then continue orchestration."""
     from .hitl import confirm_action
     board = board or get_blackboard()
+    existing = board.get(state_id)
+    expected_principal = str(principal_id or f"telegram:{int(user_id or 0)}")
+    if existing is None:
+        state = AgentState(status=AgentStatus.FAILED.value)
+        state.final_message = "state_not_found"
+        return state
+    if user_id and existing.principal_id not in {expected_principal, f"legacy:user:{int(user_id)}"}:
+        state = AgentState(user_id=int(user_id), principal_id=expected_principal, status=AgentStatus.FAILED.value)
+        state.final_message = "principal_mismatch"
+        return state
     ok, state, reason = confirm_action(
         state_id, action_id, user_id=user_id, confirm_token=confirm_token, board=board,
     )
@@ -613,8 +641,10 @@ def continue_after_confirm(
         state = AgentState(status=AgentStatus.FAILED.value)
         state.final_message = "state_not_found"
         return state
-    if user_id and int(state.user_id or 0) not in {0, int(user_id)}:
-        state.final_message = "user_mismatch"
+    expected_principal = f"telegram:{int(user_id or 0)}"
+    if user_id and (int(state.user_id or 0) not in {0, int(user_id)}
+                    or state.principal_id not in {expected_principal, f"legacy:user:{int(user_id)}"}):
+        state.final_message = "principal_mismatch"
         return state
     pending = (state.extensions or {}).get("pending_action") or {}
     tool = str(pending.get("tool") or state.capability_id or "")

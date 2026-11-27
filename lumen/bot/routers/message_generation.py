@@ -135,14 +135,19 @@ async def execute_bot_generation(
                     sid = str(meta.get("state_id") or "")
                     if sid and isinstance(context.user_data, dict):
                         st_live = get_blackboard().get(sid)
-                        if st_live is not None:
+                        if (
+                            st_live is not None
+                            and int(getattr(st_live, "user_id", 0) or 0) == int(uid or 0)
+                        ):
                             bp = (getattr(st_live, "extensions", None) or {}).get("pending_action") or {}
-                            if isinstance(bp, dict) and bp.get("confirm_token"):
+                            from lumen.engine.services.multi_agent.hitl import confirmation_token_for_state
+                            durable_token = confirmation_token_for_state(st_live)
+                            if isinstance(bp, dict) and durable_token:
                                 pend = dict(context.user_data.get("multi_agent_pending") or {})
                                 pend.update({
                                     "action_id": bp.get("action_id") or pend.get("action_id"),
                                     "state_id": sid,
-                                    "confirm_token": bp.get("confirm_token"),
+                                    "confirm_token": durable_token,
                                     "tool": bp.get("tool") or pend.get("tool") or "langgraph_plan_approve",
                                 })
                                 context.user_data["multi_agent_pending"] = pend

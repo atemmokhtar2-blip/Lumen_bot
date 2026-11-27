@@ -32,16 +32,29 @@ from lumen.engine.services.multi_agent.langgraph_pipeline.runner import (
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("MULTI_AGENT_BOARD", "memory")
     monkeypatch.setenv("MULTI_AGENT_LANGGRAPH_HITL", "1")
     monkeypatch.setenv("MULTI_AGENT_CHECKPOINT", "1")
     monkeypatch.setenv("LANGGRAPH_CHECKPOINT_PATH", str(tmp_path / "ckpt.sqlite"))
     monkeypatch.setenv("MULTI_AGENT_MAX_ATTEMPTS", "1")
-    # reset singleton so each test gets a fresh, empty checkpointer.
-    # We inject a fresh MemorySaver (process-local, empty) to SIMULATE the
-    # cross-process scenario: the webhook process has a checkpointer that
-    # knows nothing about the worker process's checkpoint for this thread.
+    # Reset the module that actually owns the singleton used by _compile_graph.
+    # The package-level alias is a function; assigning a similarly named
+    # package attribute does not replace flags._SHARED_CHECKPOINTER.
     from langgraph.checkpoint.memory import MemorySaver
-    lgp._SHARED_CHECKPOINTER = MemorySaver()
+    from lumen.engine.services.multi_agent.langgraph_pipeline import flags, graph_builder
+    from lumen.engine.services.multi_agent.blackboard import MemoryBlackboard, set_blackboard
+    from lumen.engine.services.multi_agent import blackboard as bb_mod
+
+    flags._SHARED_CHECKPOINTER = MemorySaver()
+    # Force the plan gate in this test so a missing checkpoint produces the
+    # exact re-interrupt condition the guard is designed to reject.
+    monkeypatch.setattr(graph_builder, "_any_llm_provider_available", lambda: True)
+    monkeypatch.setattr(graph_builder, "_run_named", lambda registry, name, state, ctx: state)
+    set_blackboard(MemoryBlackboard())
+    yield
+    flags._SHARED_CHECKPOINTER = None
+    bb_mod._default_board = None
 
 
 def _make_state(tmp_path, thread_id: str) -> AgentState:

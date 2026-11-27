@@ -32,6 +32,12 @@ def try_handle_hitl_message(
         logger.exception("multi_agent HITL import failed")
         return False, "", None
 
+    try:
+        from lumen.engine.services.multi_agent.hitl import confirmation_token_for_state
+    except Exception:
+        def confirmation_token_for_state(state):
+            return ""
+
     parsed = parse_confirmation_message(text or "")
     if parsed is None:
         return False, "", None
@@ -65,7 +71,7 @@ def try_handle_hitl_message(
             bp = ext.get("pending_action") or {}
             if isinstance(bp, dict) and str(bp.get("status") or "pending") == "pending":
                 board_action = str(bp.get("action_id") or "").strip()
-                board_token = str(bp.get("confirm_token") or "").strip()
+                board_token = confirmation_token_for_state(latest)
                 board_state = str(bp.get("state_id") or getattr(latest, "state_id", "") or "").strip()
                 if board_action:
                     action_id = board_action
@@ -94,14 +100,17 @@ def try_handle_hitl_message(
                 board_state = latest
         if state_id and (not action_id or (verb == "confirm" and not token)):
             board_state = board_state or get_blackboard().get(state_id)
-            if board_state is not None:
+            if (
+                board_state is not None
+                and int(getattr(board_state, "user_id", 0) or 0) == int(user_id or 0)
+            ):
                 ext = getattr(board_state, "extensions", None) or {}
                 bp = ext.get("pending_action") or {}
                 if isinstance(bp, dict):
                     if not action_id:
                         action_id = str(bp.get("action_id") or "")
                     if not token:
-                        token = str(bp.get("confirm_token") or "")
+                        token = confirmation_token_for_state(board_state)
                     if isinstance(user_data, dict):
                         user_data["multi_agent_pending"] = {
                             "action_id": action_id,
@@ -206,6 +215,12 @@ def remember_hitl_pending(user_data: dict[str, Any] | None, state: Any) -> None:
     try:
         ext = getattr(state, "extensions", None) or {}
         pending = ext.get("pending_action") or {}
+        try:
+            from lumen.engine.services.multi_agent.hitl import confirmation_token_for_state
+
+            confirm_token = pending.get("confirm_token") or confirmation_token_for_state(state)
+        except Exception:
+            confirm_token = pending.get("confirm_token") or ""
         if pending or ext.get("langgraph_interrupt"):
             user_data["multi_agent_pending"] = {
                 "action_id": pending.get("action_id"),
@@ -214,7 +229,7 @@ def remember_hitl_pending(user_data: dict[str, Any] | None, state: Any) -> None:
                 "langgraph_thread_id": ext.get("langgraph_thread_id"),
                 # Store the HMAC token so a verb-only "تأكيد" confirm (without the
                 # user typing the long token) can be validated by confirm_action.
-                "confirm_token": pending.get("confirm_token") or "",
+                "confirm_token": confirm_token,
             }
             user_data["multi_agent_state_id"] = (
                 getattr(state, "state_id", "") or pending.get("state_id")
