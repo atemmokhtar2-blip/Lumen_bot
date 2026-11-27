@@ -42,11 +42,15 @@ def _env(monkeypatch, tmp_path):
     # The package-level alias is a function; assigning a similarly named
     # package attribute does not replace flags._SHARED_CHECKPOINTER.
     from langgraph.checkpoint.memory import MemorySaver
-    from lumen.engine.services.multi_agent.langgraph_pipeline import flags
+    from lumen.engine.services.multi_agent.langgraph_pipeline import flags, graph_builder
     from lumen.engine.services.multi_agent.blackboard import MemoryBlackboard, set_blackboard
     from lumen.engine.services.multi_agent import blackboard as bb_mod
 
     flags._SHARED_CHECKPOINTER = MemorySaver()
+    # Force the plan gate in this test so a missing checkpoint produces the
+    # exact re-interrupt condition the guard is designed to reject.
+    monkeypatch.setattr(graph_builder, "_any_llm_provider_available", lambda: True)
+    monkeypatch.setattr(graph_builder, "_run_named", lambda registry, name, state, ctx: state)
     set_blackboard(MemoryBlackboard())
     yield
     flags._SHARED_CHECKPOINTER = None
