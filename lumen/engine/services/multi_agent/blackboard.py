@@ -55,11 +55,8 @@ class MemoryBlackboard(BlackboardStore):
             return self._data.get(state_id)
 
     def latest_for_user(self, user_id: int) -> Optional[AgentState]:
-        with self._lock:
-            items = [s for s in self._data.values() if int(s.user_id or 0) == int(user_id or 0)]
-        if not items:
-            return None
-        return max(items, key=lambda s: s.updated_at)
+        return (self.latest_for_principal(f"telegram:{int(user_id or 0)}")
+                or self.latest_for_principal(f"legacy:user:{int(user_id or 0)}"))
 
     def latest_for_principal(self, principal_id: str) -> Optional[AgentState]:
         principal = str(principal_id or "").strip()
@@ -129,6 +126,10 @@ class FileBlackboard(BlackboardStore):
                 return None
 
     def latest_for_user(self, user_id: int) -> Optional[AgentState]:
+        return (self.latest_for_principal(f"telegram:{int(user_id or 0)}")
+                or self.latest_for_principal(f"legacy:user:{int(user_id or 0)}"))
+
+    def _legacy_latest_for_user_removed(self, user_id: int) -> Optional[AgentState]:
         with self._lock:
             if not self._index_path.exists():
                 return None
@@ -300,8 +301,8 @@ class PostgresBlackboardStore(BlackboardStore):
         return self._decode(row)
 
     def latest_for_user(self, user_id: int) -> Optional[AgentState]:
-        # Compatibility lookup is confined to legacy records.
-        return self.latest_for_principal(f"legacy:user:{int(user_id or 0)}")
+        return (self.latest_for_principal(f"telegram:{int(user_id or 0)}")
+                or self.latest_for_principal(f"legacy:user:{int(user_id or 0)}"))
 
     def latest_for_principal(self, principal_id: str) -> Optional[AgentState]:
         principal = str(principal_id or "").strip()
