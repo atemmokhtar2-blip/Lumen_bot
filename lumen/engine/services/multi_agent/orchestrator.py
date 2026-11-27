@@ -281,7 +281,9 @@ def get_state(state_id: str) -> Optional[AgentState]:
 
 
 def latest_for_user(user_id: int) -> Optional[AgentState]:
-    return get_blackboard().latest_for_principal(f"legacy:user:{int(user_id or 0)}")
+    uid = int(user_id or 0)
+    return (get_blackboard().latest_for_principal(f"telegram:{uid}")
+            or get_blackboard().latest_for_principal(f"legacy:user:{uid}"))
 
 
 def latest_for_principal(principal_id: str) -> Optional[AgentState]:
@@ -587,6 +589,7 @@ def resume_after_confirm(
     action_id: str,
     *,
     user_id: int = 0,
+    principal_id: str | None = None,
     confirm_token: str = "",
     work_dir: str | Path | None = None,
     board: BlackboardStore | None = None,
@@ -594,6 +597,16 @@ def resume_after_confirm(
     """Confirm HITL action (action_id + token) then continue orchestration."""
     from .hitl import confirm_action
     board = board or get_blackboard()
+    existing = board.get(state_id)
+    expected_principal = str(principal_id or f"telegram:{int(user_id or 0)}")
+    if existing is None:
+        state = AgentState(status=AgentStatus.FAILED.value)
+        state.final_message = "state_not_found"
+        return state
+    if user_id and existing.principal_id not in {expected_principal, f"legacy:user:{int(user_id)}"}:
+        state = AgentState(user_id=int(user_id), principal_id=expected_principal, status=AgentStatus.FAILED.value)
+        state.final_message = "principal_mismatch"
+        return state
     ok, state, reason = confirm_action(
         state_id, action_id, user_id=user_id, confirm_token=confirm_token, board=board,
     )
@@ -628,8 +641,10 @@ def continue_after_confirm(
         state = AgentState(status=AgentStatus.FAILED.value)
         state.final_message = "state_not_found"
         return state
-    if user_id and int(state.user_id or 0) not in {0, int(user_id)}:
-        state.final_message = "user_mismatch"
+    expected_principal = f"telegram:{int(user_id or 0)}"
+    if user_id and (int(state.user_id or 0) not in {0, int(user_id)}
+                    or state.principal_id not in {expected_principal, f"legacy:user:{int(user_id)}"}):
+        state.final_message = "principal_mismatch"
         return state
     pending = (state.extensions or {}).get("pending_action") or {}
     tool = str(pending.get("tool") or state.capability_id or "")
