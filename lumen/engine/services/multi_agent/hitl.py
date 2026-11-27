@@ -261,8 +261,7 @@ def confirmation_token_for_state(state: AgentState | None) -> str:
     pending = _load_pending(state)
     if pending is None or pending.status != "pending" or pending.is_expired():
         return ""
-    if pending.confirm_token:  # legacy persisted state; next write removes it
-        return pending.confirm_token
+    # Re-derive rather than returning a legacy raw token loaded from old state.
     return _sign(
         pending.action_id,
         pending.state_id,
