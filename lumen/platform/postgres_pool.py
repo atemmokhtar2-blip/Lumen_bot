@@ -59,9 +59,9 @@ def get_postgres_pool():
         )
         try:
             pool.open(wait=True, timeout=timeout)
-        except Exception:
+        except Exception as exc:
             pool.close()
-            logger.exception("PostgreSQL connection pool initialization failed")
+            logger.error("PostgreSQL connection pool initialization failed (%s)", type(exc).__name__)
             raise
         _POOL = pool
         logger.info("PostgreSQL connection pool ready (max_size=%s)", max_size)
