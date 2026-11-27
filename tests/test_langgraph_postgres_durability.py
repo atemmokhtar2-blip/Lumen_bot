@@ -155,3 +155,26 @@ def test_application_blackboard_is_shared_between_processes():
 
     with board._pool.connection(timeout=10) as conn:
         conn.execute("DELETE FROM lumen_agent_states WHERE state_id=%s", (state.state_id,))
+
+
+def test_blackboard_rejects_cross_user_state_id_overwrite():
+    from lumen.engine.services.multi_agent.blackboard import get_blackboard
+    from lumen.engine.services.multi_agent.state import AgentState
+
+    board = get_blackboard()
+    original = AgentState(user_id=903, user_text="owned by user 903")
+    board.put(original)
+
+    forged = AgentState(
+        state_id=original.state_id,
+        user_id=904,
+        user_text="attempted overwrite by another user",
+    )
+    with pytest.raises(PermissionError, match="agent_state_owner_mismatch"):
+        board.put(forged)
+
+    persisted = board.get(original.state_id)
+    assert persisted is not None
+    assert persisted.user_id == 903
+    assert persisted.user_text == "owned by user 903"
+    board.delete(original.state_id)
