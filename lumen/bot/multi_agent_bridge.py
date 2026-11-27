@@ -35,7 +35,8 @@ def try_handle_hitl_message(
     try:
         from lumen.engine.services.multi_agent.hitl import confirmation_token_for_state
     except Exception:
-        confirmation_token_for_state = lambda state: ""
+        def confirmation_token_for_state(state):
+            return ""
 
     parsed = parse_confirmation_message(text or "")
     if parsed is None:
