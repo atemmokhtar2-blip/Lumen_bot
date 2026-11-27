@@ -29,6 +29,10 @@ class BlackboardStore(ABC):
         ...
 
     @abstractmethod
+    def latest_for_principal(self, principal_id: str) -> Optional[AgentState]:
+        ...
+
+    @abstractmethod
     def list_ids(self, *, limit: int = 100) -> list[str]:
         ...
 
@@ -56,6 +60,12 @@ class MemoryBlackboard(BlackboardStore):
         if not items:
             return None
         return max(items, key=lambda s: s.updated_at)
+
+    def latest_for_principal(self, principal_id: str) -> Optional[AgentState]:
+        principal = str(principal_id or "").strip()
+        with self._lock:
+            items = [state for state in self._data.values() if state.principal_id == principal]
+        return max(items, key=lambda state: state.updated_at) if items else None
 
     def list_ids(self, *, limit: int = 100) -> list[str]:
         with self._lock:
@@ -86,6 +96,7 @@ class FileBlackboard(BlackboardStore):
                 idx = json.loads(self._index_path.read_text(encoding="utf-8") or "{}")
             idx[state.state_id] = {
                 "user_id": state.user_id,
+                "principal_id": state.principal_id,
                 "status": state.status,
                 "updated_at": state.updated_at,
             }
@@ -134,6 +145,22 @@ class FileBlackboard(BlackboardStore):
             sid = max(candidates, key=lambda x: float(x[1].get("updated_at") or 0))[0]
             return self.get(sid)
 
+    def latest_for_principal(self, principal_id: str) -> Optional[AgentState]:
+        principal = str(principal_id or "").strip()
+        with self._lock:
+            if not self._index_path.exists():
+                return None
+            try:
+                index = json.loads(self._index_path.read_text(encoding="utf-8") or "{}")
+            except Exception:
+                return None
+            matches = [(sid, meta) for sid, meta in index.items()
+                       if str(meta.get("principal_id") or "") == principal]
+            if not matches:
+                return None
+            sid = max(matches, key=lambda item: float(item[1].get("updated_at") or 0))[0]
+            return self.get(sid)
+
     def list_ids(self, *, limit: int = 100) -> list[str]:
         with self._lock:
             if not self._index_path.exists():
@@ -179,10 +206,33 @@ class PostgresBlackboardStore(BlackboardStore):
                 CREATE TABLE IF NOT EXISTS lumen_agent_states (
                     state_id TEXT PRIMARY KEY,
                     user_id BIGINT NOT NULL,
+                    principal_id TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
                     updated_at DOUBLE PRECISION NOT NULL,
                     payload JSONB NOT NULL
                 )
+                """
+            )
+            conn.execute(
+                """
+                ALTER TABLE lumen_agent_states
+                ADD COLUMN IF NOT EXISTS principal_id TEXT NOT NULL DEFAULT ''
+                """
+            )
+            # Keep pre-migration records in a quarantined legacy namespace.
+            conn.execute(
+                """
+                UPDATE lumen_agent_states
+                SET principal_id = 'legacy:user:' || user_id::text,
+                    payload = jsonb_set(payload, '{principal_id}',
+                        to_jsonb('legacy:user:' || user_id::text), true)
+                WHERE principal_id = ''
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_lumen_agent_states_principal_updated
+                ON lumen_agent_states (principal_id, updated_at DESC)
                 """
             )
             conn.execute(
@@ -219,17 +269,19 @@ class PostgresBlackboardStore(BlackboardStore):
             cur = conn.execute(
                 """
                 INSERT INTO lumen_agent_states
-                    (state_id, user_id, status, updated_at, payload)
-                VALUES (%s, %s, %s, %s, %s::jsonb)
+                    (state_id, user_id, principal_id, status, updated_at, payload)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb)
                 ON CONFLICT (state_id) DO UPDATE SET
                     status = EXCLUDED.status,
                     updated_at = EXCLUDED.updated_at,
                     payload = EXCLUDED.payload
                 WHERE lumen_agent_states.user_id = EXCLUDED.user_id
+                  AND lumen_agent_states.principal_id = EXCLUDED.principal_id
                 """,
                 (
                     state.state_id,
                     int(state.user_id or 0),
+                    str(state.principal_id),
                     str(state.status or ""),
                     float(state.updated_at),
                     payload,
@@ -248,15 +300,22 @@ class PostgresBlackboardStore(BlackboardStore):
         return self._decode(row)
 
     def latest_for_user(self, user_id: int) -> Optional[AgentState]:
+        # Compatibility lookup is confined to legacy records.
+        return self.latest_for_principal(f"legacy:user:{int(user_id or 0)}")
+
+    def latest_for_principal(self, principal_id: str) -> Optional[AgentState]:
+        principal = str(principal_id or "").strip()
+        if not principal or len(principal) > 256:
+            return None
         with self._pool.connection(timeout=10) as conn:
             row = conn.execute(
                 """
                 SELECT payload FROM lumen_agent_states
-                WHERE user_id=%s
+                WHERE principal_id=%s
                 ORDER BY updated_at DESC
                 LIMIT 1
                 """,
-                (int(user_id or 0),),
+                (principal,),
             ).fetchone()
         return self._decode(row)
 
@@ -315,6 +374,15 @@ class LayeredBlackboard(BlackboardStore):
         if s is not None:
             self.memory.put(s)
         return s
+
+    def latest_for_principal(self, principal_id: str) -> Optional[AgentState]:
+        state = self.memory.latest_for_principal(principal_id)
+        if state is not None:
+            return state
+        state = self.file.latest_for_principal(principal_id)
+        if state is not None:
+            self.memory.put(state)
+        return state
 
     def list_ids(self, *, limit: int = 100) -> list[str]:
         ids = self.memory.list_ids(limit=limit)
