@@ -83,7 +83,6 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
 
@@ -105,13 +104,12 @@ jobs:
           echo "${ENV_KEY}=$TG_AUTH_VALUE" >> "$GITHUB_ENV"
           echo "TBE_TOKEN_SECRET=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
 
-      - name: Integration with testcontainers
+      - name: Required integration with testcontainers
         env:
           PYTHONPATH: ${{ github.workspace }}
           TBE_TESTCONTAINERS: "1"
           ENVIRONMENT: development
-        # Soft-fail only for container infra flakiness — install above is strict
-        run: pytest tests/test_live_runner_integration.py -q --tb=short || true
+        run: pytest tests/test_live_runner_integration.py -q --tb=short
 
   postgres-durability:
     runs-on: ubuntu-latest
