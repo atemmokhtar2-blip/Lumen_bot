@@ -56,6 +56,7 @@ jobs:
             tests/test_hitl_verb_only_confirm.py \
             tests/test_hitl_resume_cross_process.py \
             tests/test_langgraph_hitl_durable.py \
+            tests/test_temporal_generation_gate.py \
             tests/test_safe_fs_openat2.py \
             tests/test_live_runner_integration.py \
             -k "not postgres and not redis_testcontainer" 2>&1 | tee unit-pytest.log
