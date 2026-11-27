@@ -281,7 +281,11 @@ def get_state(state_id: str) -> Optional[AgentState]:
 
 
 def latest_for_user(user_id: int) -> Optional[AgentState]:
-    return get_blackboard().latest_for_user(int(user_id or 0))
+    return get_blackboard().latest_for_principal(f"legacy:user:{int(user_id or 0)}")
+
+
+def latest_for_principal(principal_id: str) -> Optional[AgentState]:
+    return get_blackboard().latest_for_principal(principal_id)
 
 
 def orchestrate_generate(
@@ -289,6 +293,7 @@ def orchestrate_generate(
     work_dir: str | Path,
     *,
     user_id: int = 0,
+    principal_id: str | None = None,
     preferred_keys: Optional[list[str]] = None,
     spec_request: Optional[str] = None,
     registry: AgentRegistry | None = None,
@@ -398,6 +403,7 @@ def orchestrate_generate(
     registry = registry or get_registry()
     state = AgentState(
         user_id=int(user_id or 0),
+        principal_id=str(principal_id or f"telegram:{int(user_id or 0)}"),
         user_text=_safe_user_text(request),
         spec_request=(spec_request or request or ""),
         preferred_keys=list(preferred_keys or []),
