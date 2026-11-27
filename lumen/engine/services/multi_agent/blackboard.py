@@ -129,23 +129,6 @@ class FileBlackboard(BlackboardStore):
         return (self.latest_for_principal(f"telegram:{int(user_id or 0)}")
                 or self.latest_for_principal(f"legacy:user:{int(user_id or 0)}"))
 
-    def _legacy_latest_for_user_removed(self, user_id: int) -> Optional[AgentState]:
-        with self._lock:
-            if not self._index_path.exists():
-                return None
-            try:
-                idx = json.loads(self._index_path.read_text(encoding="utf-8") or "{}")
-            except Exception:
-                return None
-            candidates = [
-                (sid, meta) for sid, meta in idx.items()
-                if int(meta.get("user_id") or 0) == int(user_id or 0)
-            ]
-            if not candidates:
-                return None
-            sid = max(candidates, key=lambda x: float(x[1].get("updated_at") or 0))[0]
-            return self.get(sid)
-
     def latest_for_principal(self, principal_id: str) -> Optional[AgentState]:
         principal = str(principal_id or "").strip()
         with self._lock:
@@ -155,8 +138,11 @@ class FileBlackboard(BlackboardStore):
                 index = json.loads(self._index_path.read_text(encoding="utf-8") or "{}")
             except Exception:
                 return None
+            legacy_user = principal.split(":", 2)[2] if principal.startswith("legacy:user:") else None
             matches = [(sid, meta) for sid, meta in index.items()
-                       if str(meta.get("principal_id") or "") == principal]
+                       if (str(meta.get("principal_id") or "") == principal
+                           or (legacy_user is not None and not meta.get("principal_id")
+                               and str(meta.get("user_id") or "") == legacy_user))]
             if not matches:
                 return None
             sid = max(matches, key=lambda item: float(item[1].get("updated_at") or 0))[0]
@@ -187,6 +173,7 @@ class PostgresBlackboardStore(BlackboardStore):
     CREATE TABLE IF NOT EXISTS lumen_agent_states (
         state_id TEXT PRIMARY KEY,
         user_id BIGINT NOT NULL,
+        principal_id TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL,
         updated_at DOUBLE PRECISION NOT NULL,
         payload JSONB NOT NULL
