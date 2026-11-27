@@ -74,7 +74,7 @@ def test_confirm_verb_only_with_user_data(board):
             "tool": "langgraph_plan_approve",
         },
     }
-    handled, reply = try_handle_hitl_message("تأكيد", user_id=7, user_data=ud)
+    handled, reply, _state = try_handle_hitl_message("تأكيد", user_id=7, user_data=ud)
     assert handled is True
     # confirm_action must succeed; continue may fail without full langgraph graph — still not bad_token
     assert "bad_token" not in reply
@@ -152,9 +152,9 @@ def test_keyboard_builds_hitl_buttons():
     assert kb is not None
     # InlineKeyboardMarkup with 2 buttons
     rows = kb.inline_keyboard
-    assert len(rows) == 1
-    assert len(rows[0]) == 2
-    texts = {b.text for b in rows[0]}
+    buttons = [button for row in rows for button in row]
+    assert len(buttons) == 2
+    texts = {button.text for button in buttons}
     assert any("تأكيد" in t for t in texts)
     assert any("رفض" in t for t in texts)
 
@@ -165,7 +165,7 @@ def test_other_user_cannot_hydrate_pending_confirmation_token(board):
     st, _pending = _make_pending_state(user_id=311)
     user_data = {"multi_agent_state_id": st.state_id}
 
-    handled, _reply = try_handle_hitl_message(
+    handled, _reply, _state = try_handle_hitl_message(
         "تأكيد", user_id=312, user_data=user_data
     )
     assert handled is True
