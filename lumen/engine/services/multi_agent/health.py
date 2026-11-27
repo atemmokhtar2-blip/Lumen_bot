@@ -20,6 +20,9 @@ def _check_blackboard() -> dict[str, Any]:
         board.put(probe)
         got = board.get(probe.state_id)
         ok = got is not None and got.state_id == probe.state_id
+        cleanup = getattr(board, "delete", None)
+        if callable(cleanup):
+            cleanup(probe.state_id)
         return {"ok": ok, "latency_ms": int((time.time() - t0) * 1000)}
     except Exception as exc:
         return {"ok": False, "error": type(exc).__name__, "latency_ms": int((time.time() - t0) * 1000)}
@@ -63,7 +66,7 @@ def health_snapshot(*, deep: bool = True) -> dict[str, Any]:
         "subsystem": "multi_agent",
         "checks": checks,
         "metrics": metrics_snapshot(),
-        "durability": "langgraph_sqlite + temporal_optional",
+        "durability": "postgresql_checkpoints_and_blackboard_in_production",
     }
 
 
