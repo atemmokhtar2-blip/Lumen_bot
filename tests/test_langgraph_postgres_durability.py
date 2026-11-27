@@ -178,3 +178,37 @@ def test_blackboard_rejects_cross_user_state_id_overwrite():
     assert persisted.user_id == 903
     assert persisted.user_text == "owned by user 903"
     board.delete(original.state_id)
+
+
+def test_postgres_blackboard_never_persists_raw_hitl_token():
+    from lumen.engine.services.multi_agent.blackboard import get_blackboard
+    from lumen.engine.services.multi_agent.hitl import (
+        confirmation_token_for_state,
+        request_confirmation,
+    )
+    from lumen.engine.services.multi_agent.state import AgentState
+
+    board = get_blackboard()
+    state = AgentState(user_id=905, user_text="approval token persistence test")
+    pending = request_confirmation(
+        state,
+        tool="langgraph_plan_approve",
+        params={"goal": "safe test"},
+        reason="PostgreSQL token storage regression",
+        board=board,
+    )
+
+    persisted = board.get(state.state_id)
+    assert persisted is not None
+    assert "confirm_token" not in persisted.extensions["pending_action"]
+    assert pending.confirm_token not in (persisted.final_message or "")
+    assert confirmation_token_for_state(persisted) == pending.confirm_token
+
+    with board._pool.connection(timeout=10) as conn:
+        row = conn.execute(
+            "SELECT payload::text AS payload_text FROM lumen_agent_states WHERE state_id=%s",
+            (state.state_id,),
+        ).fetchone()
+    assert row is not None
+    assert pending.confirm_token not in row["payload_text"]
+    board.delete(state.state_id)
