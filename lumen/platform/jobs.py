@@ -676,6 +676,7 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
             description,
             str(work),
             user_id=uid,
+            principal_id=f"tenant:{job.tenant_id}",
             preferred_keys=preferred,
         )
         success = bool(getattr(result, "success", False))
