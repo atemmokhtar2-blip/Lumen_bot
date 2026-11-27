@@ -40,3 +40,6 @@
 ## عزل العمل
 
 `worktree_isolation.py` — عزل ملفات المحاولة عند التفعيل.
+
+- `BlackboardStore` — PostgreSQL JSONB مشترك في الإنتاج؛ File/Memory محليان للتطوير فقط.
+- `LangGraph PostgresSaver` — checkpoints مشتركة لاستعادة التنفيذ وHITL بين API وRQ workers والـ replicas.
