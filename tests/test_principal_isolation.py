@@ -66,3 +66,35 @@ def test_tenant_sandbox_uses_full_tenant_digest_not_numeric_user_id(tmp_path) ->
     assert first.root.parts[-1] != second.root.parts[-1]
     assert first.root.is_relative_to(tmp_path / "tenants")
     assert second.root.is_relative_to(tmp_path / "tenants")
+
+
+
+def test_state_id_cannot_be_reassigned_to_another_principal(tmp_path) -> None:
+    original = AgentState(
+        state_id="shared-state",
+        user_id=100,
+        principal_id="telegram:100",
+    )
+    attacker = AgentState(
+        state_id="shared-state",
+        user_id=100,
+        principal_id="tenant:other",
+    )
+
+    memory = MemoryBlackboard()
+    memory.put(original)
+    try:
+        memory.put(attacker)
+    except PermissionError as exc:
+        assert str(exc) == "agent_state_owner_mismatch"
+    else:
+        raise AssertionError("memory store accepted cross-principal overwrite")
+
+    files = FileBlackboard(tmp_path / "file-board")
+    files.put(original)
+    try:
+        files.put(attacker)
+    except PermissionError as exc:
+        assert str(exc) == "agent_state_owner_mismatch"
+    else:
+        raise AssertionError("file store accepted cross-principal overwrite")
