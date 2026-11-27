@@ -43,3 +43,9 @@
 
 - `BlackboardStore` — PostgreSQL JSONB مشترك في الإنتاج؛ File/Memory محليان للتطوير فقط.
 - `LangGraph PostgresSaver` — checkpoints مشتركة لاستعادة التنفيذ وHITL بين API وRQ workers والـ replicas.
+
+
+## Temporal routing safety
+
+- لا يتم اختيار Temporal تلقائيًا؛ يلزم `LUMEN_GENERATE_VIA_TEMPORAL=1` صراحةً.
+- إلى أن يكتمل جسر إشارات الموافقة من Telegram إلى Temporal، لا يُسمح بهذا المسار مع تفعيل `MULTI_AGENT_LANGGRAPH_HITL` (الافتراضي مفعّل). في هذه الحالة يبقى التنفيذ على LangGraph مع PostgreSQL checkpoints بدل تجاوز الموافقة أو تعليق المهمة انتظارًا لإشارة لا يرسلها البوت.
