@@ -361,8 +361,8 @@ def orchestrate_generate(
 
     inside = (os.environ.get("LUMEN_INSIDE_TEMPORAL_ACTIVITY") or "").strip().lower() in {"1", "true", "yes"}
     try:
-        from .temporal_client_run import run_generate_via_temporal, temporal_configured
-        if temporal_configured() and not inside and (os.environ.get("LUMEN_GENERATE_VIA_TEMPORAL") or "1").strip().lower() not in {"0", "false", "no"}:
+        from .temporal_client_run import run_generate_via_temporal, temporal_generation_enabled
+        if temporal_generation_enabled() and not inside:
             tr = run_generate_via_temporal(
                 request=request or "",
                 work_dir=str(work),
