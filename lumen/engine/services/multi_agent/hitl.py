@@ -219,7 +219,6 @@ def request_confirmation(
         "tool": pending.tool,
         "risk": risk,
         "requires_confirmation": True,
-        "token_prefix": token[:6],
     }
     try:
         state.transition(
