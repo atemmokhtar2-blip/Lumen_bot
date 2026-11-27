@@ -64,7 +64,7 @@ class MemoryBlackboard(BlackboardStore):
 
 
 class FileBlackboard(BlackboardStore):
-    """Durable JSON board under OUTPUT_DIR/multi_agent_board/ — scalable across restarts."""
+    """Local-development JSON board under OUTPUT_DIR/multi_agent_board/."""
 
     def __init__(self, root: Path | None = None) -> None:
         if root is None:
@@ -146,8 +146,113 @@ class FileBlackboard(BlackboardStore):
             return [sid for sid, _ in ordered[: max(1, min(limit, 1000))]]
 
 
+
+class PostgresBlackboardStore(BlackboardStore):
+    """Shared production AgentState store backed by PostgreSQL JSONB.
+
+    This store is separate from LangGraph's internal checkpoint tables: it is
+    the application-level index used by Telegram/API handlers to locate and
+    authorize a workflow after it ran on another worker or replica.
+    """
+
+    _SCHEMA = """
+    CREATE TABLE IF NOT EXISTS lumen_agent_states (
+        state_id TEXT PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        status TEXT NOT NULL,
+        updated_at DOUBLE PRECISION NOT NULL,
+        payload JSONB NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_lumen_agent_states_user_updated
+        ON lumen_agent_states (user_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_lumen_agent_states_status_updated
+        ON lumen_agent_states (status, updated_at DESC);
+    """
+
+    def __init__(self) -> None:
+        from lumen.platform.postgres_pool import get_postgres_pool
+
+        self._pool = get_postgres_pool()
+        with self._pool.connection(timeout=10) as conn:
+            conn.execute(self._SCHEMA)
+        logger.info("PostgreSQL AgentState blackboard ready")
+
+    @staticmethod
+    def _decode(row: dict | None) -> AgentState | None:
+        if not row:
+            return None
+        payload = row.get("payload")
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, dict):
+            raise ValueError("invalid_agent_state_payload")
+        return AgentState.from_dict(payload)
+
+    def put(self, state: AgentState) -> AgentState:
+        state.touch()
+        payload = json.dumps(
+            state.to_dict(), ensure_ascii=False, separators=(",", ":")
+        )
+        with self._pool.connection(timeout=10) as conn:
+            conn.execute(
+                """
+                INSERT INTO lumen_agent_states
+                    (state_id, user_id, status, updated_at, payload)
+                VALUES (%s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT (state_id) DO UPDATE SET
+                    user_id = EXCLUDED.user_id,
+                    status = EXCLUDED.status,
+                    updated_at = EXCLUDED.updated_at,
+                    payload = EXCLUDED.payload
+                """,
+                (
+                    state.state_id,
+                    int(state.user_id or 0),
+                    str(state.status or ""),
+                    float(state.updated_at),
+                    payload,
+                ),
+            )
+        return state
+
+    def get(self, state_id: str) -> Optional[AgentState]:
+        with self._pool.connection(timeout=10) as conn:
+            row = conn.execute(
+                "SELECT payload FROM lumen_agent_states WHERE state_id=%s",
+                (str(state_id or ""),),
+            ).fetchone()
+        return self._decode(row)
+
+    def latest_for_user(self, user_id: int) -> Optional[AgentState]:
+        with self._pool.connection(timeout=10) as conn:
+            row = conn.execute(
+                """
+                SELECT payload FROM lumen_agent_states
+                WHERE user_id=%s
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (int(user_id or 0),),
+            ).fetchone()
+        return self._decode(row)
+
+    def list_ids(self, *, limit: int = 100) -> list[str]:
+        bounded = max(1, min(int(limit), 1000))
+        with self._pool.connection(timeout=10) as conn:
+            rows = conn.execute(
+                """
+                SELECT state_id FROM lumen_agent_states
+                ORDER BY updated_at DESC
+                LIMIT %s
+                """,
+                (bounded,),
+            ).fetchall()
+        return [str(row["state_id"]) for row in rows if row.get("state_id")]
+
+
+
 class LayeredBlackboard(BlackboardStore):
-    """Memory first + durable file mirror — fast path with durability."""
+    """Local-development memory cache + file mirror."""
 
     def __init__(self, memory: MemoryBlackboard | None = None, file: FileBlackboard | None = None) -> None:
         self.memory = memory or MemoryBlackboard()
@@ -191,31 +296,25 @@ _board_lock = threading.Lock()
 
 
 def get_blackboard() -> BlackboardStore:
-    """Durable by default. Pure in-memory board is forbidden outside explicit dev."""
+    """Use shared PostgreSQL in production; local stores are development-only."""
     global _default_board
     with _board_lock:
         if _default_board is None:
-            mode = (os.environ.get("MULTI_AGENT_BOARD") or "layered").strip().lower()
-            env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").strip().lower()
-            is_dev = env in {"dev", "development", "local", "test"}
-            # Production / unset env: never pure memory (state would vanish on restart).
-            if mode == "memory" and not is_dev:
-                logger.warning(
-                    "MULTI_AGENT_BOARD=memory ignored outside dev — forcing layered durable board"
-                )
-                mode = "layered"
-            if mode == "memory" and is_dev:
-                _default_board = MemoryBlackboard()
-            elif mode == "file":
-                _default_board = FileBlackboard()
+            from lumen.platform.runtime_config import is_dev
+
+            if not is_dev():
+                # No local-file or in-memory fallback in production: silently
+                # degrading here breaks cross-replica HITL and task recovery.
+                _default_board = PostgresBlackboardStore()
             else:
-                # Redis board removed permanently — Layered (file+memory) only.
-                try:
-                    _default_board = LayeredBlackboard()
-                except Exception:
+                mode = (os.environ.get("MULTI_AGENT_BOARD") or "layered").strip().lower()
+                if mode == "memory":
+                    _default_board = MemoryBlackboard()
+                elif mode == "file":
+                    _default_board = FileBlackboard()
+                else:
                     _default_board = LayeredBlackboard()
         return _default_board
-
 
 def set_blackboard(store: BlackboardStore) -> None:
     """Tests / advanced hosts can inject a custom store."""
