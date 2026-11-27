@@ -133,9 +133,17 @@ def _shared_checkpointer():
 
 
 def close_shared_checkpointer() -> None:
-    """Close shared database resources during graceful shutdown."""
+    """Close local SQLite and shared PostgreSQL resources during shutdown."""
     global _SHARED_CHECKPOINTER
-    _SHARED_CHECKPOINTER = None
+    checkpointer, _SHARED_CHECKPOINTER = _SHARED_CHECKPOINTER, None
+    try:
+        import sqlite3
+
+        conn = getattr(checkpointer, "conn", None)
+        if isinstance(conn, sqlite3.Connection):
+            conn.close()
+    except Exception:
+        logger.exception("SQLite checkpointer shutdown failed")
     try:
         from lumen.platform.postgres_pool import close_postgres_pool
 
