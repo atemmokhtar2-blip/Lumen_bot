@@ -18,8 +18,9 @@ pymongo==4.18.3
 cryptography==50.0.0
 # Optional object storage (S3/R2/MinIO)
 # boto3==1.36.16
-# Optional Postgres host state
+# PostgreSQL state, tenant data, and production LangGraph checkpoints
 psycopg[binary]==3.2.4
+psycopg-pool==3.3.3
 
 redis==5.2.1
 rq==2.1.0
@@ -62,10 +63,9 @@ tree-sitter-cpp>=0.23.0
 # Official agent orchestration (LangGraph)
 langgraph==1.2.14
 langchain-core==1.6.1
-# Durable cross-process checkpointer — REQUIRED for Human-in-the-Loop resume
-# (generation runs in an RQ worker; confirm runs in the Telegram process).
-# Without this, MemorySaver is process-local and resume silently restarts the graph.
+# SQLite is retained for local development only. Production checkpoints use PostgreSQL.
 langgraph-checkpoint-sqlite==3.1.2
+langgraph-checkpoint-postgres==3.2.1
 
 # Official MCP Python SDK
 mcp==1.30.0
