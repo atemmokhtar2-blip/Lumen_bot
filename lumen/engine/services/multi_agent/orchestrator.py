@@ -372,6 +372,7 @@ def orchestrate_generate(
                 request=request or "",
                 work_dir=str(work),
                 user_id=int(user_id or 0),
+                principal_id=str(principal_id or f"telegram:{int(user_id or 0)}"),
                 preferred_keys=list(preferred_keys or []),
             )
             result = tr.get("result") or tr
