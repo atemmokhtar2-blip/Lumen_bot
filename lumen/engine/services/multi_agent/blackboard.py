@@ -216,16 +216,16 @@ class PostgresBlackboardStore(BlackboardStore):
             state.to_dict(), ensure_ascii=False, separators=(",", ":")
         )
         with self._pool.connection(timeout=10) as conn:
-            conn.execute(
+            cur = conn.execute(
                 """
                 INSERT INTO lumen_agent_states
                     (state_id, user_id, status, updated_at, payload)
                 VALUES (%s, %s, %s, %s, %s::jsonb)
                 ON CONFLICT (state_id) DO UPDATE SET
-                    user_id = EXCLUDED.user_id,
                     status = EXCLUDED.status,
                     updated_at = EXCLUDED.updated_at,
                     payload = EXCLUDED.payload
+                WHERE lumen_agent_states.user_id = EXCLUDED.user_id
                 """,
                 (
                     state.state_id,
@@ -235,6 +235,8 @@ class PostgresBlackboardStore(BlackboardStore):
                     payload,
                 ),
             )
+            if cur.rowcount != 1:
+                raise PermissionError("agent_state_owner_mismatch")
         return state
 
     def get(self, state_id: str) -> Optional[AgentState]:
