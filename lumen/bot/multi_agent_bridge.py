@@ -100,7 +100,10 @@ def try_handle_hitl_message(
                 board_state = latest
         if state_id and (not action_id or (verb == "confirm" and not token)):
             board_state = board_state or get_blackboard().get(state_id)
-            if board_state is not None:
+            if (
+                board_state is not None
+                and int(getattr(board_state, "user_id", 0) or 0) == int(user_id or 0)
+            ):
                 ext = getattr(board_state, "extensions", None) or {}
                 bp = ext.get("pending_action") or {}
                 if isinstance(bp, dict):
