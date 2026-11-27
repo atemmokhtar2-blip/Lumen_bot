@@ -174,7 +174,7 @@ class TestTryHandleVerbOnly:
         user_data: dict = {}
         remember_hitl_pending(user_data, state)
 
-        handled, reply = try_handle_hitl_message("تأكيد ✓", user_id=77, user_data=user_data)
+        handled, reply, _state = try_handle_hitl_message("تأكيد ✓", user_id=77, user_data=user_data)
         assert handled is True
 
     def test_verb_only_confirm_token_resolved_from_user_data(self, board):
@@ -210,7 +210,7 @@ class TestTryHandleVerbOnly:
         user_data: dict = {}
         remember_hitl_pending(user_data, state)
 
-        handled, reply = try_handle_hitl_message(
+        handled, reply, _state = try_handle_hitl_message(
             "اعمل لي بوت يرسل اقتباسات يومية", user_id=77, user_data=user_data
         )
         assert handled is False, "Normal generation request should not be handled as HITL"
@@ -219,7 +219,7 @@ class TestTryHandleVerbOnly:
         """'تأكيد' with no pending action → handled=True with 'no pending' reply."""
         user_data: dict = {}  # no pending stored
 
-        handled, reply = try_handle_hitl_message("تأكيد", user_id=77, user_data=user_data)
+        handled, reply, _state = try_handle_hitl_message("تأكيد", user_id=77, user_data=user_data)
         assert handled is True, "Should still be handled (graceful), not a new request"
         assert "لا" in reply or "تأكيد" in reply.lower() or reply  # some reply given
 
