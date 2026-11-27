@@ -174,7 +174,29 @@ class PostgresBlackboardStore(BlackboardStore):
 
         self._pool = get_postgres_pool()
         with self._pool.connection(timeout=10) as conn:
-            conn.execute(self._SCHEMA)
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS lumen_agent_states (
+                    state_id TEXT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    status TEXT NOT NULL,
+                    updated_at DOUBLE PRECISION NOT NULL,
+                    payload JSONB NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_lumen_agent_states_user_updated
+                ON lumen_agent_states (user_id, updated_at DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_lumen_agent_states_status_updated
+                ON lumen_agent_states (status, updated_at DESC)
+                """
+            )
         logger.info("PostgreSQL AgentState blackboard ready")
 
     @staticmethod
