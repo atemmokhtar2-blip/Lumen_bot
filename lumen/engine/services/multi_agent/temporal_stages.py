@@ -36,6 +36,7 @@ def load_agent(state: dict[str, Any]):
     st = AgentState(
         state_id=str(state.get("state_id") or uuid.uuid4().hex[:16]),
         user_id=int(state.get("user_id") or 0),
+        principal_id=str(state.get("principal_id") or f"legacy:user:{int(state.get('user_id') or 0)}"),
         user_text=str(state.get("request") or ""),
         spec_request=str(state.get("request") or ""),
         preferred_keys=list(state.get("preferred_keys") or []),
