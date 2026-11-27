@@ -24,6 +24,7 @@ from .orchestrator import (
     save_state,
     get_state,
     latest_for_user,
+    latest_for_principal,
     resume_after_confirm,
     continue_after_confirm,
 )
@@ -106,6 +107,7 @@ __all__ = [
     "save_state",
     "get_state",
     "latest_for_user",
+    "latest_for_principal",
     "resume_after_confirm",
     "continue_after_confirm",
     "StrictSpec",
