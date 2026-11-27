@@ -101,7 +101,7 @@ def _shared_checkpointer():
             _SHARED_CHECKPOINTER = _postgres_checkpointer()
             return _SHARED_CHECKPOINTER
         except Exception as exc:
-            logger.exception("Production PostgreSQL checkpoint initialization failed")
+            logger.error("Production PostgreSQL checkpoint initialization failed (%s)", type(exc).__name__)
             raise RuntimeError(
                 "production_postgres_checkpointer_unavailable"
             ) from exc
