@@ -221,6 +221,7 @@ if workflow is not None:
                 "request": str(payload.get("request") or payload.get("description") or ""),
                 "work_dir": str(payload.get("work_dir") or ""),
                 "user_id": int(payload.get("user_id") or 0),
+                "principal_id": str(payload.get("principal_id") or f"legacy:user:{int(payload.get('user_id') or 0)}"),
                 "preferred_keys": list(payload.get("preferred_keys") or []),
                 "state_id": state_id,
                 "agent": {},
