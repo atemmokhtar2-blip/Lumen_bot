@@ -449,6 +449,14 @@ def orchestrate_generate(
     if not success and not awaiting and out.final_message:
         errors.append(out.final_message[:500])
     pending = (out.extensions or {}).get("pending_action") or {}
+    confirm_token = ""
+    if awaiting:
+        try:
+            from .hitl import confirmation_token_for_state
+
+            confirm_token = confirmation_token_for_state(out)
+        except Exception:
+            logger.exception("HITL confirmation token derivation failed")
     return GenerationResult(
         success=success or awaiting,  # awaiting counts as handled success path
         project_path=out.generated_path or None,
@@ -484,7 +492,7 @@ def orchestrate_generate(
             "hitl_status": (out.extensions or {}).get("hitl_status"),
             "langgraph_thread_id": (out.extensions or {}).get("langgraph_thread_id"),
             "pending_action_id": pending.get("action_id"),
-            "confirm_token": pending.get("confirm_token"),
+            "confirm_token": confirm_token,
             "awaiting_hitl": awaiting,
             # Engine → Telegram presentation bridge (Rich tables)
             "presentation": (out.extensions or {}).get("presentation"),
