@@ -40,8 +40,13 @@ from lumen.bot.multi_agent_bridge import (
 @pytest.fixture
 def board():
     """Process-local in-memory blackboard (fast, isolated per test)."""
+    from lumen.engine.services.multi_agent.blackboard import set_blackboard
+    from lumen.engine.services.multi_agent import blackboard as bb_mod
+
     bb = MemoryBlackboard()
-    return bb
+    set_blackboard(bb)
+    yield bb
+    bb_mod._default_board = None
 
 
 def _make_state(board: BlackboardStore, user_id: int = 77) -> AgentState:
@@ -156,7 +161,7 @@ class TestTryHandleVerbOnly:
         user_data: dict = {}
         remember_hitl_pending(user_data, state)
 
-        handled, reply = try_handle_hitl_message("تأكيد", user_id=77, user_data=user_data)
+        handled, reply, _state = try_handle_hitl_message("تأكيد", user_id=77, user_data=user_data)
         assert handled is True, (
             "Verb-only 'تأكيد' must be handled as a HITL confirm, not fall through "
             "to a new generation request (the infinite-loop root cause)."
