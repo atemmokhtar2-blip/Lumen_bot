@@ -95,7 +95,11 @@ class PendingAction:
     nonce: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        # The signed bearer token is derived from immutable pending-action
+        # fields and the server secret. Never persist the raw token in state.
+        data = asdict(self)
+        data.pop("confirm_token", None)
+        return data
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "PendingAction":
@@ -233,9 +237,8 @@ def request_confirmation(
         f"المستوى: **{risk}**\n"
         f"السبب: {pending.reason}\n"
         f"المعرّف: `{action_id}`\n"
-        f"رمز التحقق: `{token}`\n"
-        f"للتأكيد أرسل:\n`تأكيد {action_id} {token}`\n"
-        f"للرفض:\n`رفض {action_id}`\n"
+        f"للتأكيد اضغط الزر أو أرسل: `تأكيد {action_id}`\n"
+        f"للرفض: `رفض {action_id}`\n"
         f"الصلاحية: {int(_ttl_seconds() // 60)} دقيقة"
     )
     state.record(AgentRole.HITL, "awaiting_confirmation", f"{pending.tool}:{action_id}:risk={risk}")
@@ -251,10 +254,29 @@ def _load_pending(state: AgentState) -> Optional[PendingAction]:
     return PendingAction.from_dict(raw)
 
 
+def confirmation_token_for_state(state: AgentState | None) -> str:
+    """Re-derive the pending HMAC for the owner without storing it in the DB."""
+    if state is None:
+        return ""
+    pending = _load_pending(state)
+    if pending is None or pending.status != "pending" or pending.is_expired():
+        return ""
+    if pending.confirm_token:  # legacy persisted state; next write removes it
+        return pending.confirm_token
+    return _sign(
+        pending.action_id,
+        pending.state_id,
+        pending.tool,
+        pending.user_id,
+        pending.expires_at,
+    )
+
+
 def _consume_token(action_id: str, token: str) -> bool:
     """Single-use confirm token — Redis in production, process set in dev."""
-    key = f"{action_id}:{token}"
-    redis_key = f"lumen:hitl:consumed:{action_id}:{token[:32]}"
+    token_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    key = f"{action_id}:{token_digest}"
+    redis_key = f"lumen:hitl:consumed:{action_id}:{token_digest}"
     try:
         from lumen.platform.redis_client import connect_redis_url
         from lumen.platform.runtime_config import redis_url
