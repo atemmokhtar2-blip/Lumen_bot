@@ -236,6 +236,14 @@ class PostgresBlackboardStore(BlackboardStore):
             ).fetchone()
         return self._decode(row)
 
+    def delete(self, state_id: str) -> bool:
+        with self._pool.connection(timeout=10) as conn:
+            cur = conn.execute(
+                "DELETE FROM lumen_agent_states WHERE state_id=%s",
+                (str(state_id or ""),),
+            )
+        return bool(cur.rowcount)
+
     def list_ids(self, *, limit: int = 100) -> list[str]:
         bounded = max(1, min(int(limit), 1000))
         with self._pool.connection(timeout=10) as conn:
