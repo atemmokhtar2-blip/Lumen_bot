@@ -135,7 +135,10 @@ async def execute_bot_generation(
                     sid = str(meta.get("state_id") or "")
                     if sid and isinstance(context.user_data, dict):
                         st_live = get_blackboard().get(sid)
-                        if st_live is not None:
+                        if (
+                            st_live is not None
+                            and int(getattr(st_live, "user_id", 0) or 0) == int(uid or 0)
+                        ):
                             bp = (getattr(st_live, "extensions", None) or {}).get("pending_action") or {}
                             from lumen.engine.services.multi_agent.hitl import confirmation_token_for_state
                             durable_token = confirmation_token_for_state(st_live)
