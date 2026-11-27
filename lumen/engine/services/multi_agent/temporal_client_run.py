@@ -29,6 +29,23 @@ def temporal_configured() -> bool:
     return bool((os.getenv("TEMPORAL_HOST") or "").strip())
 
 
+def temporal_generation_enabled() -> bool:
+    """Select Temporal only by explicit opt-in and only when HITL is disabled.
+
+    The Temporal workflow currently exposes a signal, but the Telegram bridge
+    does not yet send that signal. Routing an approval-gated request there would
+    either bypass approval or wait indefinitely, so LangGraph/PostgreSQL remains
+    the safe path until that bridge is implemented.
+    """
+    opt_in = (os.getenv("LUMEN_GENERATE_VIA_TEMPORAL") or "0").strip().lower()
+    if opt_in not in {"1", "true", "yes", "on"}:
+        return False
+    hitl = (os.getenv("MULTI_AGENT_LANGGRAPH_HITL") or "1").strip().lower()
+    if hitl not in {"0", "false", "no", "off"}:
+        return False
+    return temporal_configured()
+
+
 def _hitl_from_env() -> bool:
     return (os.getenv("MULTI_AGENT_LANGGRAPH_HITL") or "0").strip().lower() in {
         "1",
@@ -153,4 +170,4 @@ def run_generate_via_temporal(
         return {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
 
 
-__all__ = ["run_generate_via_temporal", "temporal_configured"]
+__all__ = ["run_generate_via_temporal", "temporal_configured", "temporal_generation_enabled"]
