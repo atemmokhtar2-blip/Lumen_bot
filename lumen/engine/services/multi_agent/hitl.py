@@ -88,7 +88,7 @@ class PendingAction:
     params_digest: str = ""  # hash of real params for integrity
     reason: str = ""
     risk: str = "high"
-    confirm_token: str = ""  # HMAC one-time
+    confirm_token: str = field(default="", repr=False)  # transient HMAC; never serialized
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0.0
     status: str = "pending"  # pending | confirmed | rejected | expired | consumed
