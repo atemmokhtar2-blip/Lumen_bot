@@ -643,7 +643,7 @@ _HANDLERS_READY = False
 def _register_builtin_handlers(runner: JobRunner) -> None:
     def handle_generate(job: Job) -> dict[str, Any]:
         from lumen.engine import generate_bot
-        from lumen.engine.services.user_sandbox import get_user_sandbox
+        from lumen.engine.services.user_sandbox import get_tenant_sandbox
         from lumen.platform.metering import get_metering
 
         description = str(job.input.get("description") or "").strip()
@@ -660,7 +660,7 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
         from lumen.api.security import stable_tenant_uid
 
         uid = stable_tenant_uid(job.tenant_id)
-        sandbox = get_user_sandbox(uid, base)
+        sandbox = get_tenant_sandbox(job.tenant_id, base)
         work = sandbox.new_project_dir(label="api")
         # Hard guarantee: generation work dir is inside this tenant sandbox
         if not sandbox.is_under_sandbox(work):
