@@ -26,9 +26,10 @@ def stable_tenant_uid(tenant_id: str) -> int:
 
 
 def tenant_sandbox_root(tenant_id: str) -> Path:
-    """Filesystem root owned by a B2B tenant (mirrors user sandbox layout)."""
-    uid = stable_tenant_uid(tenant_id)
-    return get_user_sandbox(uid, output_root()).root.resolve()
+    """Filesystem root owned by one B2B tenant, keyed by full SHA-256 digest."""
+    from lumen.engine.services.user_sandbox import get_tenant_sandbox
+
+    return get_tenant_sandbox(tenant_id, output_root()).root.resolve()
 
 
 def is_path_inside(child: Path, parent: Path) -> bool:
