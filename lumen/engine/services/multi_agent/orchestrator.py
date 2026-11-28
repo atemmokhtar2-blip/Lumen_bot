@@ -643,8 +643,9 @@ def continue_after_confirm(
         state.final_message = "state_not_found"
         return state
     expected_principal = str(principal_id or f"telegram:{int(user_id or 0)}")
-    if user_id and (int(state.user_id or 0) not in {0, int(user_id)}
-                    or state.principal_id != expected_principal):
+    if (int(user_id or 0) <= 0
+            or int(state.user_id or 0) != int(user_id)
+            or state.principal_id != expected_principal):
         state.final_message = "principal_mismatch"
         return state
     pending = (state.extensions or {}).get("pending_action") or {}
