@@ -144,17 +144,16 @@ def verify_project_under_owner(
     # openat2 / O_NOFOLLOW when available
     try:
         from lumen.engine.services.linux_path_open import verify_dir_beneath
+        from lumen.api.security import _require_openat2
 
-        verified = verify_dir_beneath(root, path, require_openat2=False)
+        verified = verify_dir_beneath(
+            root, path, require_openat2=_require_openat2()
+        )
         path = Path(verified)
         path.relative_to(root)
     except Exception as exc:
-        msg = str(exc).lower()
-        if "outside" in msg or "symlink" in msg or "forbidden" in msg:
-            raise ValueError("project_path_symlink_or_escape") from exc
-        # best-effort: still require resolved containment
-        if not path.is_dir():
-            raise ValueError("project_path_not_a_directory") from exc
+        # Verification errors are never downgraded to pathlib-only acceptance.
+        raise ValueError("project_path_symlink_or_escape") from exc
     return path
 
 
