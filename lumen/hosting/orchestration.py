@@ -98,6 +98,7 @@ def start_host(
     project_path: str,
     bot_token: str,
     user_id: int = 0,
+    tenant_id: str = "",
     service_name: str = "",
     env_vars: Optional[dict[str, str]] = None,
     backend: str = "",
@@ -121,6 +122,7 @@ def start_host(
             project_path=project_path,
             bot_token=bot_token,
             user_id=user_id,
+            tenant_id=tenant_id,
             service_name=service_name,
             env_vars=env_vars,
         )
@@ -132,6 +134,7 @@ def start_host(
         project_path=project_path,
         bot_token=bot_token,
         user_id=user_id,
+        tenant_id=tenant_id,
         service_name=service_name,
         env_vars=env_vars,
     )
