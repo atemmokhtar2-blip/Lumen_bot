@@ -125,7 +125,7 @@ def _try_auto_repair(hosting_service, inst) -> bool:
             user_id=int(getattr(inst, "user_id", 0) or 0),
             tenant_id=str(getattr(inst, "tenant_id", "") or ""),
             service_name=(
-                f"lumen-t{hashlib.sha256(str(getattr(inst, 'tenant_id', '') or '').encode()).hexdigest()[:10]}-"
+                f"lumen-t{hashlib.sha256(str(getattr(inst, 'tenant_id', '') or '').encode()).hexdigest()[:16]}-"
                 f"u{int(getattr(inst, 'user_id', 0) or 0)}-heal"
             ),
         )
