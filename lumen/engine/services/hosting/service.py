@@ -266,14 +266,14 @@ class HostingService:
                 resolve_tenant_id,
             )
             try:
-                _tid_w = resolve_tenant_id(user_id=int(user_id or 0))
+                _tid_w = resolve_tenant_id(tenant_id=tenant_id or "", user_id=int(user_id or 0))
                 if _tid_w:
                     from lumen.platform.credits.onboarding import grant_welcome_credits
 
                     grant_welcome_credits(str(_tid_w))
             except Exception:
                 pass
-            assert_hosting_allowed(user_id=int(user_id or 0))
+            assert_hosting_allowed(tenant_id=tenant_id or "", user_id=int(user_id or 0))
         except Exception as _hg:
             if type(_hg).__name__ == "GenerationBlockedError" or "generation_blocked" in str(_hg) or "hosting" in str(_hg).lower():
                 reason = str(_hg)[:120]
@@ -1009,7 +1009,7 @@ class HostingService:
         # Phase 5: hosting credits gate
         try:
             from lumen.platform.credits.guards import assert_hosting_allowed
-            assert_hosting_allowed(user_id=int(user_id))
+            assert_hosting_allowed(tenant_id=tenant_id or "", user_id=int(user_id))
         except Exception as cred_exc:
             from lumen.platform.credits.guards import GenerationBlockedError
             if isinstance(cred_exc, GenerationBlockedError) or "hosting" in str(cred_exc).lower() or "blocked" in str(cred_exc).lower() or "insufficient" in str(cred_exc).lower():
@@ -1018,7 +1018,8 @@ class HostingService:
             from lumen.platform.credits import get_credit_service
             from lumen.engine.security.phase5_bounds import hourly_hosting_credit_cost
             from lumen.platform.rating_engine import reserve_for_hosting
-            tid = f"tg:{int(user_id)}"
+            tid = (tenant_id or "").strip() or f"tg:{int(user_id)}"
+            tenant_ref = hashlib.sha256(tid.encode("utf-8")).hexdigest()[:24]
             host_cost = hourly_hosting_credit_cost(kind)
             if host_cost > 0:
                 res = reserve_for_hosting(
@@ -1026,8 +1027,8 @@ class HostingService:
                     tid,
                     hours=1,
                     ram_mb=128,
-                    reference_id=f"http-host-{user_id}",
-                    idempotency_key=f"reserve-http-{user_id}-{int(time.time()) // 3600}",
+                    reference_id=f"http-host-{tenant_ref}",
+                    idempotency_key=f"reserve-http-{tenant_ref}-{int(time.time()) // 3600}",
                 )
                 if not res.ok and "insufficient" in (getattr(res, "reason", "") or ""):
                     return HostResult(ok=False, message=f"رصيد غير كافٍ للاستضافة ({host_cost} كريدت/ساعة)")
