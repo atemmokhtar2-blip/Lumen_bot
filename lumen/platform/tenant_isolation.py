@@ -86,14 +86,19 @@ def assert_instance_owner(
     want_t = (tenant_id or "").strip()
     got_t = (getattr(inst, "tenant_id", None) or "").strip()
     if want_t:
-        # Tenant-owned instances require an exact tenant match in every env.
         if got_t != want_t:
             return False
-    elif got_t:
-        # A Telegram/user-scoped lookup must never see a tenant-bound instance,
-        # even when the numeric surrogate user_id happens to collide.
-        return False
-    return True
+        expected_principal = f"tenant:{want_t}"
+    else:
+        # Numeric user IDs alone never authorize legacy or tenant-owned rows.
+        if got_t or user_id is None or int(user_id) <= 0:
+            return False
+        expected_principal = f"telegram:{int(user_id)}"
+
+    got_principal = str(
+        getattr(inst, "principal_id", "") or f"legacy:user:{owner_uid}"
+    )
+    return got_principal == expected_principal
 
 
 def verify_project_under_owner(
