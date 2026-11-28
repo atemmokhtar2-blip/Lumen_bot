@@ -275,9 +275,12 @@ class AgentState:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "AgentState":
+        stored_version = int(d.get("schema_version") or 1)
+        if stored_version > SCHEMA_VERSION:
+            raise ValueError("unsupported_agent_state_schema")
         events = [AgentEvent.from_dict(e) for e in (d.get("events") or []) if isinstance(e, dict)]
         return cls(
-            schema_version=int(d.get("schema_version") or SCHEMA_VERSION),
+            schema_version=SCHEMA_VERSION,
             state_id=str(d.get("state_id") or uuid.uuid4().hex[:16]),
             user_id=int(d.get("user_id") or 0),
             principal_id=str(d.get("principal_id") or f"legacy:user:{int(d.get('user_id') or 0)}"),
