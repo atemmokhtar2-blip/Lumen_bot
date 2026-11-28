@@ -17,7 +17,9 @@ def test_assert_instance_owner(monkeypatch):
     from types import SimpleNamespace
     from lumen.platform.tenant_isolation import assert_instance_owner
 
-    inst = SimpleNamespace(user_id=7, tenant_id="ten_a")
+    inst = SimpleNamespace(
+        user_id=7, tenant_id="ten_a", principal_id="tenant:ten_a"
+    )
     assert assert_instance_owner(inst, user_id=7, tenant_id="ten_a")
     assert not assert_instance_owner(inst, user_id=8, tenant_id="ten_a")
     assert not assert_instance_owner(inst, user_id=7, tenant_id="ten_b")
@@ -27,8 +29,9 @@ def test_assert_instance_owner(monkeypatch):
     monkeypatch.setattr(
         "lumen.platform.prod_security_gate.is_production_runtime", lambda: True
     )
-    legacy = SimpleNamespace(user_id=7, tenant_id="")
+    legacy = SimpleNamespace(user_id=7, tenant_id="", principal_id="legacy:user:7")
     assert not assert_instance_owner(legacy, user_id=7, tenant_id="ten_a")
+    assert not assert_instance_owner(legacy, user_id=7)
 
 
 def test_fc_state_dir_per_user(tmp_path, monkeypatch):
