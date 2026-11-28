@@ -127,14 +127,25 @@ class PgHostStateStore:
 
     def _row_to_dict(self, row) -> dict[str, Any]:
         if isinstance(row, dict):
-            return dict(row)
-        keys = [
-            "instance_id", "user_id", "tenant_id", "principal_id", "project_path", "entry_point", "bot_username",
-            "status", "deployment_id", "sandbox_backend", "pid", "started_at", "last_error",
-            "last_diagnosis", "token_fp", "public_base_url", "webhook_public_url", "internal_port", "platform", "cpu_quota", "memory_mb", "version_ref",
-            "last_health_at", "updated_at",
-        ]
-        return {k: row[i] for i, k in enumerate(keys)}
+            data = dict(row)
+        else:
+            keys = [
+                "instance_id", "user_id", "tenant_id", "principal_id", "project_path", "entry_point", "bot_username",
+                "status", "deployment_id", "sandbox_backend", "pid", "started_at", "last_error",
+                "last_diagnosis", "token_fp", "public_base_url", "webhook_public_url", "internal_port", "platform", "cpu_quota", "memory_mb", "version_ref",
+                "last_health_at", "updated_at",
+            ]
+            data = {k: row[i] for i, k in enumerate(keys)}
+        try:
+            diagnosis = data.get("last_diagnosis") or "{}"
+            data["last_diagnosis"] = (
+                json.loads(diagnosis) if isinstance(diagnosis, str) else diagnosis
+            )
+            if not isinstance(data["last_diagnosis"], dict):
+                data["last_diagnosis"] = {}
+        except Exception:
+            data["last_diagnosis"] = {}
+        return data
 
     def list_all(self) -> list[dict[str, Any]]:
         sql = (
