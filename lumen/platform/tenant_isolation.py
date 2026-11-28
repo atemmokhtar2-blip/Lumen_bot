@@ -127,9 +127,6 @@ def verify_project_under_owner(
     sandbox.ensure()
     root = sandbox.root.resolve()
     raw = str(project_path or "").strip()
-    if not raw or "\x00" in raw or ".." in raw.replace("\\", "/").split("/"):
-        # still allow legitimate .. only after resolve containment
-        pass
     if not raw:
         raise ValueError("project_path_required")
     if "\x00" in raw:
