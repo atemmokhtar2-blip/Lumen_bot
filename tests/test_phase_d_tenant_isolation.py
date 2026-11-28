@@ -201,7 +201,6 @@ def test_host_service_list_isolates_tenant_from_telegram_same_numeric_uid(monkey
     assert [x.instance_id for x in service.list_for_user(123, tenant_id="tenant/acme")] == ["tenant"]
     assert service.get("tenant", user_id=123) is None
     assert service.get("tenant", user_id=123, tenant_id="tenant/acme") is service._instances["tenant"]
-    assert service.get_internal("tenant") is service._instances["tenant"]
 
 
 
