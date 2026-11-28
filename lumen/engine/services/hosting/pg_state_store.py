@@ -254,8 +254,9 @@ class PgHostStateStore:
         user_id: int,
         project_path: str,
         token_fp: str,
-        principal_id: str = "",
+        principal_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        principal = str(principal_id or f"telegram:{int(user_id)}")
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -270,7 +271,7 @@ class PgHostStateStore:
                       AND principal_id = %s
                       AND (project_path = %s OR (token_fp != '' AND token_fp = %s))
                     """,
-                    (int(user_id), principal_id, project_path, token_fp or ""),
+                    (int(user_id), principal, project_path, token_fp or ""),
                 )
                 rows = cur.fetchall()
         return [self._row_to_dict(r) for r in rows]
