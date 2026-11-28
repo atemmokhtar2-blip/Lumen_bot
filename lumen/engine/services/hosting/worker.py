@@ -193,10 +193,15 @@ def process_one(queue=None, fleet=None) -> bool:
                 env = inject_secrets_env(build_path, env)
             except Exception:
                 pass
+            # Platform-owned principal must override project-provided environment.
+            env["TBE_USER_ID"] = str(int(job.user_id))
+            env["LUMEN_PRINCIPAL_ID"] = f"telegram:{int(job.user_id)}"
+            env.pop("LUMEN_TENANT_ID", None)
             backend, handle = start_permanent_host_bot(
                 project_path=build_path,
                 bot_token=token,
                 user_id=int(job.user_id),
+                tenant_id="",
                 service_name=f"user-{job.user_id}",
                 env_vars=env,
             )
@@ -217,6 +222,8 @@ def process_one(queue=None, fleet=None) -> bool:
                 payload = {
                     "instance_id": iid,
                     "user_id": int(job.user_id),
+                    "tenant_id": "",
+                    "principal_id": f"telegram:{int(job.user_id)}",
                     "project_path": str(build_path),
                     "entry_point": prep.entry_point or "",
                     "bot_username": str(meta.get("bot_username") or ""),
