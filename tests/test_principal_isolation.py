@@ -8,7 +8,11 @@ from lumen.engine.services.multi_agent.orchestrator import (
     continue_after_confirm,
     resume_after_confirm,
 )
-from lumen.engine.services.multi_agent.hitl import confirm_action, reject_action
+from lumen.engine.services.multi_agent.hitl import (
+    confirm_action,
+    reject_action,
+    consume_execute_grant,
+)
 from lumen.engine.services.user_sandbox import get_tenant_sandbox
 
 
@@ -174,3 +178,24 @@ def test_hitl_rejects_same_numeric_user_with_different_principal(tmp_path) -> No
         work_dir=tmp_path,
     )
     assert continued.final_message == "principal_mismatch"
+
+
+
+def test_hitl_execute_grant_is_bound_to_exact_principal() -> None:
+    state = AgentState(user_id=42, principal_id="tenant:acme")
+    state.extensions["hitl_execute_grant"] = {
+        "tool": "host_start",
+        "user_id": 42,
+        "principal_id": "telegram:42",
+        "params_digest": "",
+        "single_use": True,
+    }
+
+    assert not consume_execute_grant(
+        state,
+        "host_start",
+        user_id=42,
+        principal_id="telegram:42",
+        params={},
+    )
+    assert "hitl_execute_grant" in state.extensions
