@@ -171,3 +171,18 @@ def test_raw_confirmation_token_is_not_persisted_in_agent_state():
         board=board,
     )
     assert ok, reason
+
+
+
+def test_confirmation_hmac_is_namespaced_by_principal():
+    from lumen.engine.services.multi_agent.hitl import _sign
+
+    telegram = _sign(
+        "action", "state", "host_start", 42, 1_900_000_000,
+        principal_id="telegram:42",
+    )
+    tenant = _sign(
+        "action", "state", "host_start", 42, 1_900_000_000,
+        principal_id="tenant:acme",
+    )
+    assert telegram != tenant
