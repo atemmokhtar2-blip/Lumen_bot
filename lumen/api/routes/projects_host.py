@@ -110,7 +110,7 @@ async def project_delete(request: web.Request) -> web.Response:
     instance_id = str(request.match_info.get("id") or "").strip()
     uid = _uid(tenant.tenant_id)
     svc = get_hosting_service()
-    inst = svc.get(instance_id, user_id=uid)
+    inst = svc.get(instance_id, user_id=uid, tenant_id=tenant.tenant_id)
     if inst is None:
         raise web.HTTPNotFound(text='{"error":"project_not_found"}', content_type="application/json")
     await asyncio.to_thread(lambda: svc.stop(instance_id=instance_id, user_id=uid, tenant_id=tenant.tenant_id))
