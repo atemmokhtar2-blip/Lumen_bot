@@ -303,7 +303,10 @@ class HostingService:
                 return HostResult(ok=False, message="مسار المشروع خارج مساحة عزل المستخدم")
             try:
                 from lumen.engine.services.disk_quota import enforce_user_quota
-                enforce_user_quota(sandbox.root, user_id=int(user_id))
+                enforce_user_quota(
+                    sandbox.root,
+                    user_id=int(getattr(sandbox, "user_id", user_id) or user_id),
+                )
             except RuntimeError as exc:
                 return HostResult(ok=False, message=f"حصة التخزين ممتلئة: {exc}")
         except Exception:
