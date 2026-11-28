@@ -92,3 +92,11 @@ def test_tenant_host_records_never_enter_telegram_redis_namespace(monkeypatch):
     redis_state.delete_instance("tenant-host", user_id=123, tenant_id="tenant/acme")
     assert redis_state.list_for_user(123, tenant_id="tenant/acme") == []
     assert [x["instance_id"] for x in redis_state.list_for_user(123)] == ["telegram-host"]
+
+    # Legacy flat rows without a proven principal are not reclassified as Telegram.
+    fake.values["lumen:host:inst:legacy-host"] = (
+        '{"instance_id":"legacy-host","user_id":123,"tenant_id":"","status":"running"}'
+    )
+    fake.sets.setdefault("lumen:host:user:123", set()).add("legacy-host")
+    assert redis_state.get_instance("legacy-host") is None
+    assert [x["instance_id"] for x in redis_state.list_for_user(123)] == ["telegram-host"]
