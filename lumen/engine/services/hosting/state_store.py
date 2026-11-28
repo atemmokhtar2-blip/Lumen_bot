@@ -45,7 +45,6 @@ CREATE TABLE IF NOT EXISTS instances (
 );
 CREATE INDEX IF NOT EXISTS idx_instances_user ON instances(user_id);
 CREATE INDEX IF NOT EXISTS idx_instances_token ON instances(token_fp);
-CREATE INDEX IF NOT EXISTS idx_instances_principal ON instances(principal_id, user_id);
 """
 
 
@@ -108,6 +107,9 @@ class HostingStateStore:
                 conn.execute(f"ALTER TABLE instances ADD COLUMN {col} {decl}")
             except Exception:
                 pass
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_instances_principal ON instances(principal_id, user_id)"
+        )
 
     def _row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         d = dict(row)
