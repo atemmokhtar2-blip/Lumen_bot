@@ -657,7 +657,14 @@ class HostingService:
         env = {
             "TELEGRAM_BOT_TOKEN": bot_token,
             "BOT_TOKEN": bot_token,
+            "TBE_USER_ID": str(int(user_id or 0)),
+            "LUMEN_PRINCIPAL_ID": (
+                f"tenant:{tenant_id}" if (tenant_id or "").strip()
+                else f"telegram:{int(user_id or 0)}"
+            ),
         }
+        if (tenant_id or "").strip():
+            env["LUMEN_TENANT_ID"] = str(tenant_id)
         env.update({k: str(v) for k, v in (prepared.env_vars or {}).items() if k and v is not None})
         try:
             from lumen.templates.owner_env import merge_owner_into_env
