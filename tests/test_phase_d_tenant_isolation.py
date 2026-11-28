@@ -296,6 +296,17 @@ def test_sqlite_host_registry_persists_principal_and_quarantines_legacy(tmp_path
     assert row["tenant_id"] == "tenant/acme"
     assert row["principal_id"] == "tenant:tenant/acme"
 
+    with pytest.raises(PermissionError, match="host_instance_owner_mismatch"):
+        store.upsert({
+            "instance_id": "tenant-row",
+            "user_id": 123,
+            "tenant_id": "tenant/attacker",
+            "principal_id": "tenant:tenant/attacker",
+            "project_path": "/tmp/attacker",
+            "status": "running",
+        })
+    assert store.get("tenant-row")["principal_id"] == "tenant:tenant/acme"
+
     store.upsert({
         "instance_id": "legacy-row",
         "user_id": 123,
