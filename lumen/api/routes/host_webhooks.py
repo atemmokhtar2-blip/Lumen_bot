@@ -45,12 +45,16 @@ def _secret_ok(request: web.Request, instance_id: str) -> bool:
     expected = (os.environ.get("TBE_HOST_WEBHOOK_SECRET") or "").strip()
     if expected:
         return bool(header) and _const_eq(header, expected)
-    # Per-instance secret from Redis
+    # Per-instance secret from the authoritative host registry. This internal
+    # lookup does not authorize user-facing instance access.
     try:
-        from lumen.engine.services.hosting.redis_state import get_instance
+        from lumen.engine.services.hosting import get_hosting_service
+        from lumen.bot.config import OUTPUT_DIR
 
-        inst = get_instance(instance_id) or {}
-        inst_secret = str((inst.get("last_diagnosis") or {}).get("webhook_secret") or "")
+        inst = get_hosting_service(OUTPUT_DIR).get_internal(instance_id)
+        inst_secret = str(
+            (getattr(inst, "last_diagnosis", None) or {}).get("webhook_secret") or ""
+        )
         if inst_secret:
             return bool(header) and _const_eq(header, inst_secret)
     except Exception:
@@ -74,26 +78,18 @@ async def telegram_host_webhook(request: web.Request) -> web.Response:
 
     inst = None
     try:
-        from lumen.engine.services.hosting.redis_state import get_instance
+        from lumen.engine.services.hosting import get_hosting_service
+        from lumen.bot.config import OUTPUT_DIR
 
-        inst = get_instance(instance_id)
+        live = get_hosting_service(OUTPUT_DIR).get_internal(instance_id)
+        if live is not None:
+            inst = {
+                "instance_id": live.instance_id,
+                "status": live.status,
+                "last_diagnosis": dict(getattr(live, "last_diagnosis", None) or {}),
+            }
     except Exception:
-        inst = None
-    if not inst or str((inst or {}).get("status") or "") != "running":
-        # Fallback: control-plane HostingService registry
-        try:
-            from lumen.engine.services.hosting import get_hosting_service
-            from lumen.bot.config import OUTPUT_DIR
-
-            live = get_hosting_service(OUTPUT_DIR).get(instance_id)
-            if live is not None and str(getattr(live, "status", "") or "") == "running":
-                inst = {
-                    "instance_id": live.instance_id,
-                    "status": live.status,
-                    "last_diagnosis": dict(getattr(live, "last_diagnosis", None) or {}),
-                }
-        except Exception:
-            pass
+        logger.exception("host webhook internal registry lookup failed")
     if not inst or str(inst.get("status") or "") != "running":
         return web.json_response({"ok": True, "ignored": "not_running"})
 
