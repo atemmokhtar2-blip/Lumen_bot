@@ -305,7 +305,9 @@ def get_tenant_sandbox(tenant_id: str, base_dir: str | Path | None = None) -> Us
         raise ValueError("invalid_tenant_id")
     digest = hashlib.sha256(tenant.encode("utf-8")).hexdigest()
     base = Path(base_dir or os.getenv("OUTPUT_DIR") or _cm_default_output_dir()).resolve()
-    uid = int(digest[:16], 16)
+    # Keep the quota surrogate inside PostgreSQL signed BIGINT range.
+    # The full digest, not this surrogate, remains the filesystem isolation key.
+    uid = int(digest[:15], 16)
     root = base / "tenants" / digest[:2] / digest[2:4] / digest
     return UserSandbox(user_id=uid, root=root).ensure()
 
