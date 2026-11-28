@@ -27,6 +27,7 @@ def repair_serverless_project(
     *,
     bot_token: str,
     user_id: int = 0,
+    tenant_id: str = "",
     service_name: str = "",
     env_vars: dict[str, str] | None = None,
 ) -> RepairResult:
@@ -60,6 +61,7 @@ def repair_serverless_project(
             project_path=str(root),
             bot_token=token,
             user_id=int(user_id or 0),
+            tenant_id=tenant_id or "",
             service_name=service_name or f"lumen-u{int(user_id or 0)}-repair",
             env_vars=env,
             backend="lumen_serverless",
