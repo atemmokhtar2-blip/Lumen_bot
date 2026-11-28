@@ -6,7 +6,10 @@ import pytest
 
 def test_redis_keys_namespaced():
     from lumen.platform.tenant_isolation import host_instance_redis_key, host_user_index_key
-    assert "t:ten_abc" in host_instance_redis_key("host-1", tenant_id="ten_abc")
+    key_a = host_instance_redis_key("host-1", tenant_id="ten_abc")
+    key_b = host_instance_redis_key("host-1", tenant_id="ten/a_bc")
+    assert key_a.startswith("lumen:host:t:t_")
+    assert key_a != key_b
     assert host_instance_redis_key("host-1", tenant_id="") == "lumen:host:inst:host-1"
 
 
@@ -18,6 +21,9 @@ def test_assert_instance_owner(monkeypatch):
     assert assert_instance_owner(inst, user_id=7, tenant_id="ten_a")
     assert not assert_instance_owner(inst, user_id=8, tenant_id="ten_a")
     assert not assert_instance_owner(inst, user_id=7, tenant_id="ten_b")
+    # Matching numeric surrogate alone must not expose a tenant-owned instance
+    # through a Telegram/user-scoped listing.
+    assert not assert_instance_owner(inst, user_id=7)
     monkeypatch.setattr(
         "lumen.platform.prod_security_gate.is_production_runtime", lambda: True
     )
@@ -91,3 +97,46 @@ def test_docker_ack_required_in_prod_gate(monkeypatch):
 def test_hosts_api_passes_tenant_id():
     src = open("lumen/api/routes/hosts.py", encoding="utf-8").read()
     assert "tenant_id=tenant.tenant_id" in src
+
+
+
+def test_verify_uses_tenant_sandbox_not_numeric_user_sandbox(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    from lumen.engine.services.user_sandbox import get_tenant_sandbox, get_user_sandbox
+    from lumen.platform.tenant_isolation import verify_project_under_owner
+
+    tenant_sandbox = get_tenant_sandbox("tenant/acme", tmp_path)
+    tenant_project = tenant_sandbox.new_project_dir(label="tenant-project")
+    verified = verify_project_under_owner(
+        user_id=7,
+        tenant_id="tenant/acme",
+        project_path=str(tenant_project),
+        base_dir=tmp_path,
+    )
+    assert verified == tenant_project.resolve()
+
+    user_sandbox = get_user_sandbox(7, tmp_path)
+    user_project = user_sandbox.new_project_dir(label="user-project")
+    with pytest.raises(ValueError, match="outside_sandbox"):
+        verify_project_under_owner(
+            user_id=7,
+            tenant_id="tenant/acme",
+            project_path=str(user_project),
+            base_dir=tmp_path,
+        )
+
+
+def test_tenant_key_and_firecracker_namespaces_are_collision_resistant(tmp_path, monkeypatch):
+    from lumen.platform.tenant_isolation import (
+        safe_tenant_segment,
+        firecracker_state_dir,
+        host_user_index_key,
+    )
+
+    assert safe_tenant_segment("a/b") != safe_tenant_segment("a_b")
+    assert host_user_index_key(5, tenant_id="a/b") != host_user_index_key(5, tenant_id="a_b")
+
+    monkeypatch.setenv("TBE_FC_STATE_DIR", str(tmp_path / "fc"))
+    one = firecracker_state_dir(user_id=5, tenant_id="a/b")
+    two = firecracker_state_dir(user_id=5, tenant_id="a_b")
+    assert one != two
