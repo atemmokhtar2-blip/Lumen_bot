@@ -686,7 +686,7 @@ class HostingService:
             else:
                 _env.pop("LUMEN_TENANT_ID", None)
             tenant_ref = (
-                hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:12]
+                hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:16]
                 if (tenant_id or "").strip()
                 else "telegram"
             )
