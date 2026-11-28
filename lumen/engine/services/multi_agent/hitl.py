@@ -59,8 +59,17 @@ def _hmac_secret() -> bytes:
     return hashlib.sha256(configured.encode("utf-8")).digest()
 
 
-def _sign(action_id: str, state_id: str, tool: str, user_id: int, expires_at: float) -> str:
-    msg = f"{action_id}|{state_id}|{tool}|{user_id}|{int(expires_at)}".encode()
+def _sign(
+    action_id: str,
+    state_id: str,
+    tool: str,
+    user_id: int,
+    expires_at: float,
+    principal_id: str = "",
+) -> str:
+    msg = (
+        f"{action_id}|{state_id}|{tool}|{user_id}|{principal_id}|{int(expires_at)}"
+    ).encode()
     return hmac.new(_hmac_secret(), msg, hashlib.sha256).hexdigest()[:24]
 
 
@@ -192,7 +201,10 @@ def request_confirmation(
     action_id = secrets.token_hex(6)
     nonce = secrets.token_hex(4)
     expires = time.time() + _ttl_seconds()
-    token = _sign(action_id, state.state_id, tool, int(state.user_id or 0), expires)
+    token = _sign(
+        action_id, state.state_id, tool, int(state.user_id or 0), expires,
+        principal_id=state.principal_id,
+    )
     risk = tool_risk(tool)
 
     pending = PendingAction(
@@ -267,6 +279,7 @@ def confirmation_token_for_state(state: AgentState | None) -> str:
         pending.tool,
         pending.user_id,
         pending.expires_at,
+        principal_id=state.principal_id,
     )
 
 
@@ -357,7 +370,8 @@ def confirm_action(
     expected = (pending.confirm_token or "").strip()
     if not expected:
         expected = _sign(
-            pending.action_id, pending.state_id, pending.tool, pending.user_id, pending.expires_at
+            pending.action_id, pending.state_id, pending.tool, pending.user_id,
+            pending.expires_at, principal_id=state.principal_id,
         )
     supplied = (confirm_token or "").strip()
     if not supplied or not hmac.compare_digest(str(supplied), str(expected)):
