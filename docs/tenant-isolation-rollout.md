@@ -15,6 +15,7 @@ This change introduces namespaced principals and tenant-specific storage. It mus
 - PostgreSQL blackboard queries use `principal_id`; state ownership is immutable across user and principal.
 - Tenant sandbox paths use the full SHA-256 digest of the tenant ID. Numeric tenant surrogates are not filesystem keys.
 - Host Redis instance records and user indexes use separate, digest-based tenant namespaces. Tenant-bound records are not written to flat Telegram keys.
+- Public host slugs include a tenant digest suffix so identical project names cannot claim the same path/subdomain URL across tenants.
 - Firecracker state is stored under tenant/user-specific directories. Lifecycle operations require owner context and do not fall back to a shared root.
 
 ## Legacy data treatment
