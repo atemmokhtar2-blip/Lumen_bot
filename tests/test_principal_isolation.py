@@ -206,3 +206,20 @@ def test_hitl_execute_grant_is_bound_to_exact_principal() -> None:
         params={},
     )
     assert "hitl_execute_grant" in state.extensions
+
+
+
+def test_postgres_payload_cannot_disagree_with_owner_columns() -> None:
+    from lumen.engine.services.multi_agent.blackboard import PostgresBlackboardStore
+
+    state = AgentState(user_id=42, principal_id="telegram:42")
+    try:
+        PostgresBlackboardStore._decode({
+            "payload": state.to_dict(),
+            "principal_id": "tenant:acme",
+            "user_id": 42,
+        })
+    except ValueError as exc:
+        assert str(exc) == "agent_state_principal_column_mismatch"
+    else:
+        raise AssertionError("PostgreSQL blackboard trusted mismatched principal payload")
