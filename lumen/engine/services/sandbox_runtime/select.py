@@ -162,7 +162,7 @@ def start_sandboxed_bot(
 
     backend, probe = select_sandbox_backend(require_available=True)
     # Phase D: Firecracker state dir is per-user (never shared flat pool)
-    if backend.name == "firecracker" and int(user_id or 0) > 0:
+    if backend.name == "firecracker" and (int(user_id or 0) > 0 or (tenant_id or "").strip()):
         from .firecracker_backend import FirecrackerSandboxBackend
         backend = FirecrackerSandboxBackend(user_id=int(user_id), tenant_id=tenant_id or "")
 
