@@ -111,6 +111,7 @@ class HostInstanceRecord(BaseModel):
             instance_id=self.instance_id,
             user_id=int(self.user_id),
             tenant_id=str(self.tenant_id or ""),
+            principal_id=str(self.principal_id or f"legacy:user:{int(self.user_id)}"),
             project_path=self.project_path,
             entry_point=self.entry_point or "",
             bot_username=self.bot_username or "",
