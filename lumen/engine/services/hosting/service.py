@@ -1642,7 +1642,9 @@ class HostingService:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                     FirecrackerSandboxBackend,
                 )
-                lines = FirecrackerSandboxBackend().logs(dep, limit=200)
+                lines = FirecrackerSandboxBackend(
+                    user_id=int(inst.user_id or 0), tenant_id=str(inst.tenant_id or "")
+                ).logs(dep, limit=200)
                 if lines:
                     run_log = sanitize_log_text("\n".join(lines)[-8000:])
         except Exception:
