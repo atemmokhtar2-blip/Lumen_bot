@@ -392,6 +392,7 @@ def confirm_action(
         "action_id": action_id,
         "tool": pending.tool,
         "user_id": int(pending.user_id or state.user_id or 0),
+        "principal_id": str(state.principal_id),
         "params_digest": str(pending.params_digest or ""),
         "granted_at": time.time(),
         "single_use": True,
@@ -484,9 +485,10 @@ def consume_execute_grant(
     tool: str,
     *,
     user_id: int = 0,
+    principal_id: str | None = None,
     params: dict | None = None,
 ) -> bool:
-    """Single-use grant after confirm — bound to user_id + tool + params_digest."""
+    """Single-use grant bound to principal, user, tool, and full params digest."""
     grant = (state.extensions or {}).get("hitl_execute_grant")
     if not isinstance(grant, dict):
         return False
@@ -500,6 +502,11 @@ def consume_execute_grant(
     # positive owner match; zero must never act as a wildcard.
     if uid <= 0 or grant_uid <= 0 or grant_uid != uid:
         state.record(AgentRole.HITL, "grant_user_mismatch", tool)
+        return False
+    expected_principal = str(principal_id or state.principal_id or "")
+    grant_principal = str(grant.get("principal_id") or "")
+    if not expected_principal or grant_principal != expected_principal or state.principal_id != expected_principal:
+        state.record(AgentRole.HITL, "grant_principal_mismatch", tool)
         return False
     expected_digest = str(grant.get("params_digest") or "")
     if expected_digest:
