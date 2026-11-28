@@ -14,8 +14,9 @@ async def overview(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
     plan = get_plan(tenant.plan_id)
     usage = get_metering().snapshot(tenant.tenant_id)
-    uid = abs(hash(tenant.tenant_id)) % (10**9)
-    hosts = get_hosting_service().list_for_user(uid)
+    from lumen.api.security import stable_tenant_uid
+    uid = stable_tenant_uid(tenant.tenant_id)
+    hosts = get_hosting_service().list_for_user(uid, tenant_id=tenant.tenant_id)
     invoices = get_billing().list_invoices(tenant.tenant_id)[:5]
     return web.json_response(
         {
