@@ -990,7 +990,16 @@ class HostingService:
             registry_fields,
         )
 
-        path = _Path(project_path).resolve()
+        try:
+            from lumen.platform.tenant_isolation import verify_project_under_owner
+            path = verify_project_under_owner(
+                user_id=int(user_id),
+                project_path=project_path,
+                tenant_id=tenant_id or "",
+                base_dir=self.output_root,
+            )
+        except Exception as exc:
+            return HostResult(ok=False, message=f"عزل المسار: {type(exc).__name__}")
         if not path.is_dir():
             return HostResult(ok=False, message="مسار المشروع غير موجود")
 
