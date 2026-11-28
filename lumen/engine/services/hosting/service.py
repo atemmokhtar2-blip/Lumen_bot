@@ -1082,6 +1082,7 @@ class HostingService:
             language=(language or "python"),
             slug=slug_n,
             instance_id=iid,
+            tenant_id=tenant_id or "",
         )
         # LanguageRuntime (same path as project_kind)
         lang_n = (language or "python").strip().lower() or "python"
