@@ -71,6 +71,8 @@ def test_tenant_sandbox_uses_full_tenant_digest_not_numeric_user_id(tmp_path) ->
 
     assert first.root != second.root
     assert first.root.parts[-1] != second.root.parts[-1]
+    assert 0 <= first.user_id < 2**63
+    assert 0 <= second.user_id < 2**63
     assert first.root.is_relative_to(tmp_path / "tenants")
     assert second.root.is_relative_to(tmp_path / "tenants")
 
