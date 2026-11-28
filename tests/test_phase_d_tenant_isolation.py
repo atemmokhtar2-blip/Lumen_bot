@@ -216,3 +216,16 @@ def test_http_host_requires_tenant_binding_in_production(tmp_path, monkeypatch):
     )
     assert result.ok is False
     assert "tenant_id_required" in result.message
+
+
+
+def test_public_host_slugs_are_tenant_namespaced(monkeypatch):
+    monkeypatch.setenv("LUMEN_PUBLIC_BASE", "https://apps.example.test")
+    from lumen.engine.services.hosting.host_mode import allocate_public_url
+
+    a = allocate_public_url(slug="dashboard", tenant_id="tenant/a")
+    b = allocate_public_url(slug="dashboard", tenant_id="tenant_a")
+    assert a["slug"] != b["slug"]
+    assert a["public_url"] != b["public_url"]
+    assert a["slug"].startswith("dashboard-")
+    assert b["slug"].startswith("dashboard-")
