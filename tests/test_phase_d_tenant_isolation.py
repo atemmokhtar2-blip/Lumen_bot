@@ -140,3 +140,57 @@ def test_tenant_key_and_firecracker_namespaces_are_collision_resistant(tmp_path,
     one = firecracker_state_dir(user_id=5, tenant_id="a/b")
     two = firecracker_state_dir(user_id=5, tenant_id="a_b")
     assert one != two
+
+
+
+def test_firecracker_state_dirs_are_owner_scoped(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "0")
+    monkeypatch.setenv("TBE_FC_STATE_DIR", str(tmp_path / "fc"))
+    from lumen.engine.services.sandbox_runtime.firecracker_backend import FirecrackerSandboxBackend
+
+    a = FirecrackerSandboxBackend(user_id=7, tenant_id="tenant/a")
+    b = FirecrackerSandboxBackend(user_id=7, tenant_id="tenant_a")
+    assert a._state_dir != b._state_dir
+    assert a._state_dir.is_relative_to(tmp_path / "fc")
+    assert b._state_dir.is_relative_to(tmp_path / "fc")
+
+
+def test_firecracker_lifecycle_requires_owner_context_in_production(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    monkeypatch.setenv("TBE_FC_STATE_DIR", str(tmp_path / "fc"))
+    from lumen.engine.services.sandbox_runtime.firecracker_backend import FirecrackerSandboxBackend
+    from lumen.engine.services.sandbox_runtime.types import SandboxSpec
+
+    probe_backend = FirecrackerSandboxBackend()
+    with pytest.raises(RuntimeError, match="firecracker_owner_context_required"):
+        probe_backend.start(SandboxSpec(project_path=str(tmp_path), bot_token="x"))
+
+    owned = FirecrackerSandboxBackend(user_id=7, tenant_id="tenant/acme")
+    assert owned._state_dir != probe_backend._state_dir
+
+
+def test_host_service_list_isolates_tenant_from_telegram_same_numeric_uid(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    from lumen.engine.services.hosting.service import HostingService, HostInstance
+
+    service = HostingService.__new__(HostingService)
+    service._instances = {
+        "tenant": HostInstance(
+            instance_id="tenant",
+            user_id=123,
+            tenant_id="tenant/acme",
+            project_path="/tmp/tenant",
+            status="running",
+        ),
+        "telegram": HostInstance(
+            instance_id="telegram",
+            user_id=123,
+            tenant_id="",
+            project_path="/tmp/telegram",
+            status="running",
+        ),
+    }
+    assert [x.instance_id for x in service.list_for_user(123)] == ["telegram"]
+    assert [x.instance_id for x in service.list_for_user(123, tenant_id="tenant/acme")] == ["tenant"]
