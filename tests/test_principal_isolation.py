@@ -4,6 +4,11 @@ import json
 
 from lumen.engine.services.multi_agent.blackboard import FileBlackboard, MemoryBlackboard
 from lumen.engine.services.multi_agent.state import AgentState
+from lumen.engine.services.multi_agent.orchestrator import (
+    continue_after_confirm,
+    resume_after_confirm,
+)
+from lumen.engine.services.multi_agent.hitl import confirm_action, reject_action
 from lumen.engine.services.user_sandbox import get_tenant_sandbox
 
 
@@ -98,3 +103,69 @@ def test_state_id_cannot_be_reassigned_to_another_principal(tmp_path) -> None:
         assert str(exc) == "agent_state_owner_mismatch"
     else:
         raise AssertionError("file store accepted cross-principal overwrite")
+
+
+
+def test_ambiguous_legacy_states_are_not_exposed_as_telegram_states(tmp_path) -> None:
+    legacy = AgentState(user_id=42, principal_id="legacy:user:42")
+
+    memory = MemoryBlackboard()
+    memory.put(legacy)
+    assert memory.latest_for_principal("legacy:user:42") is legacy
+    assert memory.latest_for_user(42) is None
+
+    files = FileBlackboard(tmp_path / "legacy-board")
+    files.put(legacy)
+    assert files.latest_for_principal("legacy:user:42").state_id == legacy.state_id
+    assert files.latest_for_user(42) is None
+
+
+def test_hitl_rejects_same_numeric_user_with_different_principal(tmp_path) -> None:
+    tenant_state = AgentState(
+        state_id="tenant-owned-state",
+        user_id=42,
+        principal_id="tenant:acme",
+    )
+    board = MemoryBlackboard()
+    board.put(tenant_state)
+
+    ok, state, reason = confirm_action(
+        tenant_state.state_id,
+        "action",
+        user_id=42,
+        principal_id="telegram:42",
+        confirm_token="not-a-valid-token",
+        board=board,
+    )
+    assert not ok and reason == "principal_mismatch"
+    assert state.principal_id == "tenant:acme"
+
+    ok, state, reason = reject_action(
+        tenant_state.state_id,
+        "action",
+        user_id=42,
+        principal_id="telegram:42",
+        board=board,
+    )
+    assert not ok and reason == "principal_mismatch"
+    assert state.principal_id == "tenant:acme"
+
+    resumed = resume_after_confirm(
+        tenant_state.state_id,
+        "action",
+        user_id=42,
+        principal_id="telegram:42",
+        confirm_token="not-a-valid-token",
+        board=board,
+        work_dir=tmp_path,
+    )
+    assert resumed.final_message == "principal_mismatch"
+
+    continued = continue_after_confirm(
+        tenant_state.state_id,
+        user_id=42,
+        principal_id="telegram:42",
+        board=board,
+        work_dir=tmp_path,
+    )
+    assert continued.final_message == "principal_mismatch"
