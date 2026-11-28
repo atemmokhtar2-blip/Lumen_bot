@@ -61,8 +61,9 @@ class MemoryBlackboard(BlackboardStore):
             return self._data.get(state_id)
 
     def latest_for_user(self, user_id: int) -> Optional[AgentState]:
-        return (self.latest_for_principal(f"telegram:{int(user_id or 0)}")
-                or self.latest_for_principal(f"legacy:user:{int(user_id or 0)}"))
+        # Ambiguous pre-principal records are quarantined. Never expose them
+        # to Telegram based only on a colliding numeric user_id.
+        return self.latest_for_principal(f"telegram:{int(user_id or 0)}")
 
     def latest_for_principal(self, principal_id: str) -> Optional[AgentState]:
         principal = str(principal_id or "").strip()
@@ -138,8 +139,9 @@ class FileBlackboard(BlackboardStore):
                 return None
 
     def latest_for_user(self, user_id: int) -> Optional[AgentState]:
-        return (self.latest_for_principal(f"telegram:{int(user_id or 0)}")
-                or self.latest_for_principal(f"legacy:user:{int(user_id or 0)}"))
+        # Ambiguous pre-principal records are quarantined. Never expose them
+        # to Telegram based only on a colliding numeric user_id.
+        return self.latest_for_principal(f"telegram:{int(user_id or 0)}")
 
     def latest_for_principal(self, principal_id: str) -> Optional[AgentState]:
         principal = str(principal_id or "").strip()
@@ -300,8 +302,9 @@ class PostgresBlackboardStore(BlackboardStore):
         return self._decode(row)
 
     def latest_for_user(self, user_id: int) -> Optional[AgentState]:
-        return (self.latest_for_principal(f"telegram:{int(user_id or 0)}")
-                or self.latest_for_principal(f"legacy:user:{int(user_id or 0)}"))
+        # Ambiguous pre-principal records are quarantined. Never expose them
+        # to Telegram based only on a colliding numeric user_id.
+        return self.latest_for_principal(f"telegram:{int(user_id or 0)}")
 
     def latest_for_principal(self, principal_id: str) -> Optional[AgentState]:
         principal = str(principal_id or "").strip()
