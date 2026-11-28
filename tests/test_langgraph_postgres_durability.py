@@ -271,6 +271,17 @@ def test_postgres_host_registry_persists_tenant_principal_and_quarantines_legacy
     assert len(rows) == 1
     assert rows[0]["tenant_id"] == tenant_id
     assert rows[0]["principal_id"] == f"tenant:{tenant_id}"
+    with pytest.raises(PermissionError, match="host_instance_owner_mismatch"):
+        store.upsert({
+            "instance_id": "host-principal-test-tenant",
+            "user_id": 906,
+            "tenant_id": "tenant:attacker",
+            "principal_id": "tenant:tenant:attacker",
+            "project_path": "/tmp/attacker",
+            "status": "running",
+        })
+    rows = [r for r in store.list_all() if r["instance_id"] == "host-principal-test-tenant"]
+    assert rows[0]["principal_id"] == f"tenant:{tenant_id}"
     store.delete("host-principal-test-tenant")
 
     store.upsert({
