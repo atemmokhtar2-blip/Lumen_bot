@@ -668,11 +668,17 @@ class HostingService:
             except Exception:
                 pass
             _env = inject_secrets_env(path, env)
+            tenant_ref = (
+                hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:12]
+                if (tenant_id or "").strip()
+                else "telegram"
+            )
             _backend, handle = _orch_start(
                 project_path=str(path),
                 bot_token=token_norm,
                 user_id=int(user_id),
-                service_name=f"host-u{user_id}",
+                tenant_id=tenant_id or "",
+                service_name=f"host-{tenant_ref}-u{user_id}",
                 env_vars=_env,
             )
         except Exception as sbx_exc:
