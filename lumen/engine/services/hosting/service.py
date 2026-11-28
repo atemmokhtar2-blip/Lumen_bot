@@ -225,8 +225,11 @@ class HostingService:
                     message="tenant_id_required: الاستضافة الدائمة في الإنتاج تتطلب ربط المستأجر",
                 )
         except Exception as _tid_exc:
-            if "tenant_id_required" in str(_tid_exc):
-                raise
+            logger.exception("host tenant binding check failed")
+            return HostResult(
+                ok=False,
+                message=f"تعذر التحقق من هوية المستأجر: {type(_tid_exc).__name__}",
+            )
         # Phase D isolation: verify path under owner sandbox (openat2 when available)
         try:
             from lumen.platform.tenant_isolation import verify_project_under_owner
