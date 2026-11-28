@@ -229,3 +229,12 @@ def test_public_host_slugs_are_tenant_namespaced(monkeypatch):
     assert a["public_url"] != b["public_url"]
     assert a["slug"].startswith("dashboard-")
     assert b["slug"].startswith("dashboard-")
+
+
+
+def test_http_ingress_uses_tenant_namespaced_registry_slug():
+    source = open(
+        "lumen/engine/services/hosting/service.py",
+        encoding="utf-8",
+    ).read()
+    assert 'slug=str(fields["slug"])' in source
