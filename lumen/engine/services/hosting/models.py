@@ -18,6 +18,7 @@ class HostInstance:
     user_id: int
     project_path: str
     tenant_id: str = ""  # B2B tenant binding — required for multi-tenant isolation
+    principal_id: str = ""
     entry_point: str = ""
     bot_username: str = ""
     status: str = "stopped"  # starting | running | stopped | failed
@@ -43,6 +44,15 @@ class HostInstance:
     memory_mb: int = 128
     version_ref: str = ""  # git commit sha of project snapshot at deploy
     last_health_at: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not self.principal_id:
+            if self.tenant_id:
+                self.principal_id = f"tenant:{self.tenant_id}"
+            elif int(self.user_id or 0) > 0:
+                self.principal_id = f"telegram:{int(self.user_id)}"
+            else:
+                self.principal_id = "system:unowned"
 
 
 @dataclass
