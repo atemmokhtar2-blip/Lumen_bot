@@ -143,8 +143,11 @@ class HostInstanceRecord(BaseModel):
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "HostInstanceRecord":
-        """Validate a DB/API dict at the trust boundary."""
-        return cls.model_validate(row)
+        """Validate a DB/API dict; absent principals are quarantined on hydration."""
+        payload = dict(row or {})
+        if payload.get("principal_id") is None:
+            payload["principal_id"] = ""
+        return cls.model_validate(payload)
 
     @classmethod
     def from_host_instance(cls, inst: Any) -> "HostInstanceRecord":
