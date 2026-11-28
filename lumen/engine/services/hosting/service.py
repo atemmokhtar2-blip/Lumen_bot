@@ -179,6 +179,17 @@ class HostingService:
             logger.exception("tenant-scoped host list failed")
         return list(out.values())
 
+    def get_internal(self, instance_id: str) -> HostInstance | None:
+        """Internal lookup for secret-authenticated webhook delivery only.
+
+        User-facing API routes must call get() with authenticated owner context.
+        """
+        iid = str(instance_id or "").strip()
+        if not iid:
+            return None
+        self._load()
+        return self._instances.get(iid)
+
     def get(
         self,
         instance_id: str,
