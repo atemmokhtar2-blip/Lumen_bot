@@ -186,6 +186,12 @@ def test_hitl_rejects_same_numeric_user_with_different_principal(tmp_path) -> No
     )
     assert continued.final_message == "principal_mismatch"
 
+    without_owner = continue_after_confirm(
+        tenant_state.state_id,
+        board=board,
+        work_dir=tmp_path,
+    )
+    assert without_owner.final_message == "principal_mismatch"
 
 
 def test_hitl_execute_grant_is_bound_to_exact_principal() -> None:
