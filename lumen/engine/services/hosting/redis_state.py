@@ -85,16 +85,18 @@ def put_instance(inst: Any) -> bool:
         from lumen.platform.tenant_isolation import host_instance_redis_key, host_user_index_key
         pipe = r.pipeline()
         payload = json.dumps(d, ensure_ascii=False)
-        # Tenant-namespaced key (primary in multi-tenant)
-        pipe.setex(host_instance_redis_key(iid, tenant_id=tid), _TTL, payload)
-        # Legacy flat key for read compatibility during rollout
-        pipe.setex(_PREFIX + iid, _TTL, payload)
-        if uid:
-            pipe.sadd(host_user_index_key(uid, tenant_id=tid), iid)
-            pipe.sadd(_USER_PREFIX + str(uid), iid)
-            pipe.expire(_USER_PREFIX + str(uid), _TTL)
-            if tid:
+        if tid:
+            # Tenant-bound records must never enter the flat user namespace.
+            pipe.setex(host_instance_redis_key(iid, tenant_id=tid), _TTL, payload)
+            if uid:
+                pipe.sadd(host_user_index_key(uid, tenant_id=tid), iid)
                 pipe.expire(host_user_index_key(uid, tenant_id=tid), _TTL)
+        else:
+            # Only non-tenant (e.g. Telegram) instances use the flat namespace.
+            pipe.setex(host_instance_redis_key(iid), _TTL, payload)
+            if uid:
+                pipe.sadd(host_user_index_key(uid), iid)
+                pipe.expire(host_user_index_key(uid), _TTL)
         pipe.execute()
         return True
     except Exception as exc:
@@ -109,47 +111,56 @@ def get_instance(instance_id: str, *, tenant_id: str = "") -> Optional[dict[str,
             return None
         from lumen.platform.tenant_isolation import host_instance_redis_key
         iid = str(instance_id)
-        raw = None
-        if tenant_id:
-            raw = r.get(host_instance_redis_key(iid, tenant_id=tenant_id))
-        if not raw:
-            raw = r.get(_PREFIX + iid)
+        raw = r.get(host_instance_redis_key(iid, tenant_id=tenant_id or ""))
         if not raw:
             return None
         d = json.loads(raw)
-        # Enforce tenant match when requested
-        if tenant_id and str(d.get("tenant_id") or "") not in ("", tenant_id):
+        stored_tenant = str(d.get("tenant_id") or "").strip()
+        requested_tenant = str(tenant_id or "").strip()
+        # Exact namespace match; no cross-tenant or legacy-flat fallback.
+        if stored_tenant != requested_tenant:
             return None
         return d
     except Exception:
         return None
 
 
-def list_for_user(user_id: int) -> list[dict[str, Any]]:
+def list_for_user(user_id: int, *, tenant_id: str = "") -> list[dict[str, Any]]:
     try:
         r = _client()
         if r is None:
             return []
-        ids = r.smembers(_USER_PREFIX + str(int(user_id))) or set()
+        from lumen.platform.tenant_isolation import host_user_index_key
+        ids = r.smembers(host_user_index_key(int(user_id), tenant_id=tenant_id or "")) or set()
         out: list[dict[str, Any]] = []
         for iid in ids:
-            d = get_instance(str(iid))
+            d = get_instance(str(iid), tenant_id=tenant_id or "")
             if d:
                 out.append(d)
         return out
     except Exception:
+        logger.warning("redis_state list_for_user failed", exc_info=True)
         return []
 
 
-def delete_instance(instance_id: str, user_id: int | None = None) -> None:
+def delete_instance(
+    instance_id: str,
+    user_id: int | None = None,
+    *,
+    tenant_id: str = "",
+) -> None:
     try:
         r = _client()
         if r is None:
             return
+        from lumen.platform.tenant_isolation import host_instance_redis_key, host_user_index_key
         pipe = r.pipeline()
-        pipe.delete(_PREFIX + str(instance_id))
+        pipe.delete(host_instance_redis_key(str(instance_id), tenant_id=tenant_id or ""))
         if user_id is not None:
-            pipe.srem(_USER_PREFIX + str(int(user_id)), str(instance_id))
+            pipe.srem(
+                host_user_index_key(int(user_id), tenant_id=tenant_id or ""),
+                str(instance_id),
+            )
         pipe.execute()
     except Exception:
         logger.warning("redis_state delete failed", exc_info=True)
