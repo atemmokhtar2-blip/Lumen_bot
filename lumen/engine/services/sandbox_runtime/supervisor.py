@@ -306,6 +306,14 @@ async def supervisor_tick_async() -> Dict[str, int]:
     return await asyncio.to_thread(supervisor_tick)
 
 
+def _fc_state_dir() -> Path:
+    """Base directory containing all per-user and per-tenant Firecracker state."""
+    return Path(
+        os.environ.get("TBE_FC_STATE_DIR")
+        or os.path.join(os.environ.get("OUTPUT_DIR") or "/tmp", "fc_vms")
+    )
+
+
 def list_managed_firecracker_vms() -> List[Dict[str, Any]]:
     """List Firecracker VMs from state metas written by FirecrackerSandboxBackend."""
     import json
@@ -314,7 +322,7 @@ def list_managed_firecracker_vms() -> List[Dict[str, Any]]:
     root = _fc_state_dir()
     if not root.is_dir():
         return rows
-    for meta_p in root.glob("fc-*.json"):
+    for meta_p in root.rglob("fc-*.json"):
         try:
             meta = json.loads(meta_p.read_text(encoding="utf-8"))
         except Exception:
@@ -338,6 +346,7 @@ def list_managed_firecracker_vms() -> List[Dict[str, Any]]:
                 "pid": pid,
                 "status": "running" if running else "exited",
                 "user_id": meta.get("user_id"),
+                "tenant_id": str(meta.get("tenant_id") or ""),
                 "started_log": meta.get("log"),
                 "meta_path": str(meta_p),
                 "backend": "firecracker",
@@ -351,7 +360,6 @@ def reap_exited_firecracker(*, remove: bool = True) -> int:
     from lumen.engine.services.sandbox_runtime.firecracker_backend import (
         FirecrackerSandboxBackend,
     )
-    backend = FirecrackerSandboxBackend()
     for vm in list_managed_firecracker_vms():
         if str(vm.get("status") or "").lower() in {"running", "up"}:
             continue
@@ -360,7 +368,10 @@ def reap_exited_firecracker(*, remove: bool = True) -> int:
             continue
         if remove:
             try:
-                backend.stop(vid)
+                FirecrackerSandboxBackend(
+                    user_id=int(vm.get("user_id") or 0),
+                    tenant_id=str(vm.get("tenant_id") or ""),
+                ).stop(vid)
             except Exception:
                 logger.warning("fc reap stop failed id=%s", vid[:24])
         n += 1
@@ -376,7 +387,6 @@ def enforce_max_lifetime_firecracker() -> int:
     from lumen.engine.services.sandbox_runtime.firecracker_backend import (
         FirecrackerSandboxBackend,
     )
-    backend = FirecrackerSandboxBackend()
     killed = 0
     root = _fc_state_dir()
     now = time.time()
@@ -402,7 +412,10 @@ def enforce_max_lifetime_firecracker() -> int:
             continue
         vid = str(vm.get("id") or "")
         try:
-            backend.stop(vid)
+            FirecrackerSandboxBackend(
+                user_id=int(vm.get("user_id") or 0),
+                tenant_id=str(vm.get("tenant_id") or ""),
+            ).stop(vid)
             killed += 1
             logger.warning("supervisor killed over-lifetime fc vm %s", vid[:24])
         except Exception:
