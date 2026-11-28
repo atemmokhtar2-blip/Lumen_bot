@@ -348,6 +348,7 @@ async def host_redeploy(request: web.Request) -> web.Response:
             bot_token=bot_token,
             bot_username=inst.bot_username or "",
             entry_point=getattr(inst, "entry_point", "") or "",
+            tenant_id=tenant.tenant_id,
         )
     )
     return web.json_response(
