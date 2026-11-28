@@ -291,7 +291,9 @@ def _snapshot_and_stop(tenant_id: str) -> dict[str, Any]:
                 if vm_tenant:
                     if vm_tenant != tid_str:
                         continue
-                elif tid_str not in {str(vm_user), f"tg:{vm_user}"}:
+                elif tid_str != f"tg:{vm_user}":
+                    # Legacy unbound VM metadata is accepted only for the
+                    # explicit Telegram account namespace, never numeric tenant IDs.
                     continue
                 vid = str(vm.get("id") or "")
                 if not vid:
