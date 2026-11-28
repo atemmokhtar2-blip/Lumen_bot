@@ -388,7 +388,6 @@ def enforce_max_lifetime_firecracker() -> int:
         FirecrackerSandboxBackend,
     )
     killed = 0
-    root = _fc_state_dir()
     now = time.time()
     for vm in list_managed_firecracker_vms():
         if str(vm.get("status") or "").lower() != "running":
