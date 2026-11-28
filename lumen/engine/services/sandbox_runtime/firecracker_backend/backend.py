@@ -48,18 +48,14 @@ class FirecrackerSandboxBackend(SandboxBackend):
     strength = 100
 
     def __init__(self, *, user_id: int = 0, tenant_id: str = "") -> None:
-        try:
-            from lumen.platform.tenant_isolation import firecracker_state_dir
-            self._state_dir = firecracker_state_dir(
-                user_id=int(user_id or 0),
-                tenant_id=str(tenant_id or ""),
-            )
-        except Exception:
-            self._state_dir = Path(
-                os.environ.get("TBE_FC_STATE_DIR")
-                or os.path.join(os.environ.get("OUTPUT_DIR") or "/tmp", "fc_vms")
-            )
-            self._state_dir.mkdir(parents=True, exist_ok=True)
+        from lumen.platform.tenant_isolation import firecracker_state_dir
+        self._user_id = int(user_id or 0)
+        self._tenant_id = str(tenant_id or "").strip()
+        # Do not downgrade a failed tenant-specific path to a shared global root.
+        self._state_dir = firecracker_state_dir(
+            user_id=self._user_id,
+            tenant_id=self._tenant_id,
+        )
 
     def _api_socket(self, vm_id: str) -> Path:
         return self._state_dir / f"{vm_id}.sock"
@@ -472,6 +468,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
             "token_drive": str(token_drive) if token_drive.is_file() else "",
             "log": str(log_path),
             "user_id": spec.user_id,
+            "tenant_id": str(getattr(spec, "tenant_id", "") or self._tenant_id),
             "project_path": spec.project_path,
             "token_fp": hashlib.sha256(spec.bot_token.encode()).hexdigest()[:16],
             "network_tap": bool(tap),
