@@ -251,3 +251,35 @@ def test_postgres_blackboard_scopes_same_numeric_user_to_distinct_principals():
     assert board.get(tenant.state_id).user_text == "tenant private state"
     board.delete(telegram.state_id)
     board.delete(tenant.state_id)
+
+
+
+def test_postgres_host_registry_persists_tenant_principal_and_quarantines_legacy():
+    from lumen.engine.services.hosting.pg_state_store import PgHostStateStore
+
+    store = PgHostStateStore()
+    tenant_id = "tenant:pg-isolation-test"
+    store.upsert({
+        "instance_id": "host-principal-test-tenant",
+        "user_id": 906,
+        "tenant_id": tenant_id,
+        "principal_id": f"tenant:{tenant_id}",
+        "project_path": "/tmp/tenant-project",
+        "status": "running",
+    })
+    rows = [r for r in store.list_all() if r["instance_id"] == "host-principal-test-tenant"]
+    assert len(rows) == 1
+    assert rows[0]["tenant_id"] == tenant_id
+    assert rows[0]["principal_id"] == f"tenant:{tenant_id}"
+    store.delete("host-principal-test-tenant")
+
+    store.upsert({
+        "instance_id": "host-principal-test-legacy",
+        "user_id": 906,
+        "project_path": "/tmp/legacy-project",
+        "status": "running",
+    })
+    rows = [r for r in store.list_all() if r["instance_id"] == "host-principal-test-legacy"]
+    assert len(rows) == 1
+    assert rows[0]["principal_id"] == "legacy:user:906"
+    store.delete("host-principal-test-legacy")
