@@ -115,6 +115,11 @@ class PgHostStateStore:
                             type(exc).__name__,
                         )
                 cur.execute(
+                    "UPDATE tbe_host_instances "
+                    "SET principal_id = 'legacy:user:' || user_id::text "
+                    "WHERE principal_id = ''"
+                )
+                cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_tbe_host_principal "
                     "ON tbe_host_instances(principal_id, user_id)"
                 )
@@ -222,11 +227,16 @@ class PgHostStateStore:
                       version_ref=EXCLUDED.version_ref,
                       last_health_at=EXCLUDED.last_health_at,
                       updated_at=EXCLUDED.updated_at
+                    WHERE tbe_host_instances.user_id = EXCLUDED.user_id
+                      AND tbe_host_instances.tenant_id = EXCLUDED.tenant_id
+                      AND tbe_host_instances.principal_id = EXCLUDED.principal_id
                     """
         try:
             with self._connect() as conn:
                 with conn.cursor() as cur:
                     cur.execute(sql, payload)
+                    if cur.rowcount != 1:
+                        raise PermissionError("host_instance_owner_mismatch")
                 conn.commit()
         except Exception as exc:
             name = type(exc).__name__
