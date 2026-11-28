@@ -68,6 +68,7 @@ def test_tenant_host_records_never_enter_telegram_redis_namespace(monkeypatch):
         "instance_id": "tenant-host",
         "user_id": 123,
         "tenant_id": "tenant/acme",
+        "principal_id": "tenant:tenant/acme",
         "status": "running",
     })
     tenant_key = host_instance_redis_key("tenant-host", tenant_id="tenant/acme")
@@ -82,6 +83,7 @@ def test_tenant_host_records_never_enter_telegram_redis_namespace(monkeypatch):
         "instance_id": "telegram-host",
         "user_id": 123,
         "tenant_id": "",
+        "principal_id": "telegram:123",
         "status": "running",
     })
     assert [x["instance_id"] for x in redis_state.list_for_user(123)] == ["telegram-host"]
