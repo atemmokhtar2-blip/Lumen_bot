@@ -14,10 +14,12 @@ from lumen.engine.services.user_sandbox import get_tenant_sandbox
 
 def test_agent_state_principal_round_trip_and_legacy_default() -> None:
     state = AgentState(user_id=42)
-    assert state.principal_id == "legacy:user:42"
+    assert state.principal_id == "telegram:42"
     restored = AgentState.from_dict(state.to_dict())
     assert restored.principal_id == state.principal_id
 
+    legacy = AgentState.from_dict({"user_id": 42})
+    assert legacy.principal_id == "legacy:user:42"
     telegram = AgentState(user_id=42, principal_id="telegram:42")
     assert AgentState.from_dict(telegram.to_dict()).principal_id == "telegram:42"
 
