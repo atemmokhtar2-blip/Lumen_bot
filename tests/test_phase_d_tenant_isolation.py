@@ -174,6 +174,8 @@ def test_firecracker_lifecycle_requires_owner_context_in_production(tmp_path, mo
 def test_host_service_list_isolates_tenant_from_telegram_same_numeric_uid(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "test")
     from lumen.engine.services.hosting.service import HostingService, HostInstance
+    from lumen.engine.services.hosting import redis_state
+    monkeypatch.setattr(redis_state, "_client", lambda: None)
 
     service = HostingService.__new__(HostingService)
     service._instances = {
