@@ -43,7 +43,6 @@ CREATE TABLE IF NOT EXISTS tbe_host_instances (
 );
 CREATE INDEX IF NOT EXISTS idx_tbe_host_user ON tbe_host_instances(user_id);
 CREATE INDEX IF NOT EXISTS idx_tbe_host_status ON tbe_host_instances(status);
-CREATE INDEX IF NOT EXISTS idx_tbe_host_principal ON tbe_host_instances(principal_id, user_id);
 """
 
 
@@ -115,6 +114,10 @@ class PgHostStateStore:
                             col,
                             type(exc).__name__,
                         )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_tbe_host_principal "
+                    "ON tbe_host_instances(principal_id, user_id)"
+                )
             conn.commit()
 
     def _row_to_dict(self, row) -> dict[str, Any]:
