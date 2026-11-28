@@ -11,18 +11,18 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-import re
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("lumen.tenant_isolation")
 
-_TENANT_SAFE = re.compile(r"[^a-zA-Z0-9_-]+")
-
 
 def safe_tenant_segment(tenant_id: str) -> str:
-    s = _TENANT_SAFE.sub("_", (tenant_id or "").strip())[:64]
-    return s or "unknown"
+    """Opaque collision-resistant namespace for tenant-owned paths and keys."""
+    tenant = str(tenant_id or "").strip()
+    if not tenant or len(tenant) > 256:
+        raise ValueError("invalid_tenant_id")
+    return "t_" + hashlib.sha256(tenant.encode("utf-8")).hexdigest()
 
 
 def host_instance_redis_key(instance_id: str, *, tenant_id: str = "") -> str:
@@ -46,7 +46,7 @@ def firecracker_state_dir(*, user_id: int = 0, tenant_id: str = "") -> Path:
     )
     parts: list[str] = []
     if tenant_id:
-        parts.append(f"t_{safe_tenant_segment(tenant_id)}")
+        parts.append(safe_tenant_segment(tenant_id))
     if user_id:
         parts.append(f"u_{int(user_id)}")
     if not parts:
@@ -84,19 +84,15 @@ def assert_instance_owner(
     if user_id is not None and int(getattr(inst, "user_id", -1) or -1) != int(user_id):
         return False
     want_t = (tenant_id or "").strip()
+    got_t = (getattr(inst, "tenant_id", None) or "").strip()
     if want_t:
-        got_t = (getattr(inst, "tenant_id", None) or "").strip()
-        # Legacy instances without tenant_id: deny in production, allow in dev
-        if not got_t:
-            try:
-                from lumen.platform.prod_security_gate import is_production_runtime
-
-                if is_production_runtime():
-                    return False
-            except Exception:
-                return False
-        elif got_t != want_t:
+        # Tenant-owned instances require an exact tenant match in every env.
+        if got_t != want_t:
             return False
+    elif got_t:
+        # A Telegram/user-scoped lookup must never see a tenant-bound instance,
+        # even when the numeric surrogate user_id happens to collide.
+        return False
     return True
 
 
@@ -112,7 +108,7 @@ def verify_project_under_owner(
     ``base_dir`` must match HostService.output_root / bot OUTPUT_DIR — never guess a
     different root (that was a real isolation false-reject / false-accept bug).
     """
-    from lumen.engine.services.user_sandbox import get_user_sandbox
+    from lumen.engine.services.user_sandbox import get_tenant_sandbox, get_user_sandbox
 
     if base_dir is not None:
         base = base_dir
@@ -123,13 +119,14 @@ def verify_project_under_owner(
         except Exception:
             base = os.environ.get("OUTPUT_DIR") or "/tmp"
 
-    sandbox = get_user_sandbox(int(user_id), base)
+    sandbox = (
+        get_tenant_sandbox(tenant_id, base)
+        if (tenant_id or "").strip()
+        else get_user_sandbox(int(user_id), base)
+    )
     sandbox.ensure()
     root = sandbox.root.resolve()
     raw = str(project_path or "").strip()
-    if not raw or "\x00" in raw or ".." in raw.replace("\\", "/").split("/"):
-        # still allow legitimate .. only after resolve containment
-        pass
     if not raw:
         raise ValueError("project_path_required")
     if "\x00" in raw:
@@ -144,17 +141,16 @@ def verify_project_under_owner(
     # openat2 / O_NOFOLLOW when available
     try:
         from lumen.engine.services.linux_path_open import verify_dir_beneath
+        from lumen.api.security import _require_openat2
 
-        verified = verify_dir_beneath(root, path, require_openat2=False)
+        verified = verify_dir_beneath(
+            root, path, require_openat2=_require_openat2()
+        )
         path = Path(verified)
         path.relative_to(root)
     except Exception as exc:
-        msg = str(exc).lower()
-        if "outside" in msg or "symlink" in msg or "forbidden" in msg:
-            raise ValueError("project_path_symlink_or_escape") from exc
-        # best-effort: still require resolved containment
-        if not path.is_dir():
-            raise ValueError("project_path_not_a_directory") from exc
+        # Verification errors are never downgraded to pathlib-only acceptance.
+        raise ValueError("project_path_symlink_or_escape") from exc
     return path
 
 

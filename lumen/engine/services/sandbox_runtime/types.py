@@ -12,6 +12,7 @@ class SandboxSpec:
     project_path: str
     bot_token: str
     user_id: int = 0
+    tenant_id: str = ""
     service_name: str = "generated-bot"
     env_vars: dict[str, str] = field(default_factory=dict)
     memory: str = ""

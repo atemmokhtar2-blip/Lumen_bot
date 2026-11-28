@@ -32,11 +32,18 @@ def try_handle_hitl_message(
         logger.exception("multi_agent HITL import failed")
         return False, "", None
 
+    try:
+        from lumen.engine.services.multi_agent.hitl import confirmation_token_for_state
+    except Exception:
+        def confirmation_token_for_state(state):
+            return ""
+
     parsed = parse_confirmation_message(text or "")
     if parsed is None:
         return False, "", None
 
     verb, action_id, token = parsed
+    expected_principal = f"telegram:{int(user_id or 0)}"
     state_id = ""
     pending: dict = {}
     if isinstance(user_data, dict):
@@ -65,7 +72,7 @@ def try_handle_hitl_message(
             bp = ext.get("pending_action") or {}
             if isinstance(bp, dict) and str(bp.get("status") or "pending") == "pending":
                 board_action = str(bp.get("action_id") or "").strip()
-                board_token = str(bp.get("confirm_token") or "").strip()
+                board_token = confirmation_token_for_state(latest)
                 board_state = str(bp.get("state_id") or getattr(latest, "state_id", "") or "").strip()
                 if board_action:
                     action_id = board_action
@@ -94,14 +101,18 @@ def try_handle_hitl_message(
                 board_state = latest
         if state_id and (not action_id or (verb == "confirm" and not token)):
             board_state = board_state or get_blackboard().get(state_id)
-            if board_state is not None:
+            if (
+                board_state is not None
+                and int(getattr(board_state, "user_id", 0) or 0) == int(user_id or 0)
+                and str(getattr(board_state, "principal_id", "") or "") == expected_principal
+            ):
                 ext = getattr(board_state, "extensions", None) or {}
                 bp = ext.get("pending_action") or {}
                 if isinstance(bp, dict):
                     if not action_id:
                         action_id = str(bp.get("action_id") or "")
                     if not token:
-                        token = str(bp.get("confirm_token") or "")
+                        token = confirmation_token_for_state(board_state)
                     if isinstance(user_data, dict):
                         user_data["multi_agent_pending"] = {
                             "action_id": action_id,
@@ -118,7 +129,10 @@ def try_handle_hitl_message(
         return True, "لا يوجد إجراء معلّق. اطلب التوليد من جديد ثم أكّد أو ارفض.", None
 
     if verb == "reject":
-        ok, state, reason = reject_action(state_id, action_id, user_id=int(user_id or 0))
+        ok, state, reason = reject_action(
+            state_id, action_id, user_id=int(user_id or 0),
+            principal_id=expected_principal,
+        )
         if ok and state is not None:
             ext = getattr(state, "extensions", None) or {}
             pend = ext.get("pending_action") or {}
@@ -143,6 +157,7 @@ def try_handle_hitl_message(
         reason_ar = {
             "state_not_found": "لم يُعثر على الجلسة",
             "user_mismatch": "هذا الطلب ليس لحسابك",
+            "principal_mismatch": "هذا الطلب لا يخص هوية حسابك",
             "action_mismatch": "لا يوجد إجراء معلّق للرفض",
         }.get(str(reason), str(reason))
         return True, f"تعذر الرفض: {reason_ar}", None
@@ -160,7 +175,8 @@ def try_handle_hitl_message(
         ), None
 
     ok, state, reason = confirm_action(
-        state_id, action_id, user_id=int(user_id or 0), confirm_token=token or "",
+        state_id, action_id, user_id=int(user_id or 0),
+        principal_id=expected_principal, confirm_token=token or "",
     )
     if not ok or state is None:
         reason_ar = {
@@ -172,13 +188,16 @@ def try_handle_hitl_message(
             "expired": "انتهت مهلة الموافقة (انتهت الصلاحية) — أعد التوليد",
             "state_not_found": "لم يُعثر على جلسة التوليد — أعد التوليد",
             "user_mismatch": "التأكيد يجب أن يكون من نفس الحساب",
+            "principal_mismatch": "هذا الطلب لا يخص هوية حسابك",
         }.get(str(reason), str(reason))
         if str(reason).startswith("already_"):
             reason_ar = "تم التعامل مع هذا الإجراء مسبقاً"
         return True, f"تعذر التأكيد: {reason_ar}"[:4000], None
 
     try:
-        state = continue_after_confirm(state_id, user_id=int(user_id or 0))
+        state = continue_after_confirm(
+            state_id, user_id=int(user_id or 0), principal_id=expected_principal,
+        )
     except Exception as exc:
         logger.exception("continue_after_confirm failed")
         state = get_blackboard().get(state_id)
@@ -206,6 +225,12 @@ def remember_hitl_pending(user_data: dict[str, Any] | None, state: Any) -> None:
     try:
         ext = getattr(state, "extensions", None) or {}
         pending = ext.get("pending_action") or {}
+        try:
+            from lumen.engine.services.multi_agent.hitl import confirmation_token_for_state
+
+            confirm_token = pending.get("confirm_token") or confirmation_token_for_state(state)
+        except Exception:
+            confirm_token = pending.get("confirm_token") or ""
         if pending or ext.get("langgraph_interrupt"):
             user_data["multi_agent_pending"] = {
                 "action_id": pending.get("action_id"),
@@ -214,7 +239,7 @@ def remember_hitl_pending(user_data: dict[str, Any] | None, state: Any) -> None:
                 "langgraph_thread_id": ext.get("langgraph_thread_id"),
                 # Store the HMAC token so a verb-only "تأكيد" confirm (without the
                 # user typing the long token) can be validated by confirm_action.
-                "confirm_token": pending.get("confirm_token") or "",
+                "confirm_token": confirm_token,
             }
             user_data["multi_agent_state_id"] = (
                 getattr(state, "state_id", "") or pending.get("state_id")

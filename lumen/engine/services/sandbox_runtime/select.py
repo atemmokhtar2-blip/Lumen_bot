@@ -154,6 +154,7 @@ def start_sandboxed_bot(
     project_path: str,
     bot_token: str,
     user_id: int = 0,
+    tenant_id: str = "",
     service_name: str = "",
     env_vars: Optional[dict] = None,
 ):
@@ -161,9 +162,9 @@ def start_sandboxed_bot(
 
     backend, probe = select_sandbox_backend(require_available=True)
     # Phase D: Firecracker state dir is per-user (never shared flat pool)
-    if backend.name == "firecracker" and int(user_id or 0) > 0:
+    if backend.name == "firecracker" and (int(user_id or 0) > 0 or (tenant_id or "").strip()):
         from .firecracker_backend import FirecrackerSandboxBackend
-        backend = FirecrackerSandboxBackend(user_id=int(user_id))
+        backend = FirecrackerSandboxBackend(user_id=int(user_id), tenant_id=tenant_id or "")
 
     # Container backends need Docker egress network hardening.
     # Firecracker uses TAP/netns — do not require Docker network there.
@@ -176,6 +177,7 @@ def start_sandboxed_bot(
         project_path=str(project_path),
         bot_token=bot_token,
         user_id=int(user_id or 0),
+        tenant_id=str(tenant_id or ""),
         service_name=service_name or f"host-u{user_id}",
         env_vars=dict(env_vars or {}),
     )
@@ -192,6 +194,7 @@ def start_permanent_host_bot(
     project_path: str,
     bot_token: str,
     user_id: int = 0,
+    tenant_id: str = "",
     service_name: str = "",
     env_vars: Optional[dict] = None,
 ):
@@ -227,6 +230,7 @@ def start_permanent_host_bot(
         project_path=str(project_path),
         bot_token=bot_token,
         user_id=int(user_id or 0),
+        tenant_id=str(tenant_id or ""),
         service_name=service_name or f"host-u{user_id}",
         env_vars=dict(env_vars or {}),
     )
@@ -236,7 +240,9 @@ def start_permanent_host_bot(
         spec_kwargs["cpus"] = str(vcpus)
 
     spec = SandboxSpec(**spec_kwargs)
-    backend = FirecrackerSandboxBackend()
+    backend = FirecrackerSandboxBackend(
+        user_id=int(user_id or 0), tenant_id=str(tenant_id or "")
+    )
     probe = backend.probe()
     if not probe.available:
         raise RuntimeError(
@@ -293,6 +299,7 @@ def start_trial_sandboxed_bot(
     project_path: str,
     bot_token: str,
     user_id: int = 0,
+    tenant_id: str = "",
     service_name: str = "trial-chat",
     env_vars: Optional[dict] = None,
 ):
@@ -300,6 +307,11 @@ def start_trial_sandboxed_bot(
     from .types import SandboxSpec
 
     backend, probe = select_trial_sandbox_backend(require_available=True)
+    if backend.name == "firecracker":
+        from .firecracker_backend import FirecrackerSandboxBackend
+        backend = FirecrackerSandboxBackend(
+            user_id=int(user_id or 0), tenant_id=str(tenant_id or "")
+        )
     if backend.name != "firecracker":
         try:
             from .egress import harden_network
@@ -311,6 +323,7 @@ def start_trial_sandboxed_bot(
         project_path=str(project_path),
         bot_token=bot_token,
         user_id=int(user_id or 0),
+        tenant_id=str(tenant_id or ""),
         service_name=service_name or "trial-chat",
         env_vars=dict(env_vars or {}),
     )

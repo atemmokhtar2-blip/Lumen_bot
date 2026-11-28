@@ -2,6 +2,7 @@
 from .service import (
     UserSandbox,
     get_user_sandbox,
+    get_tenant_sandbox,
     clean_child_env,
     write_token_file,
     shard_for_user,
@@ -12,6 +13,7 @@ from .service import (
 __all__ = [
     "UserSandbox",
     "get_user_sandbox",
+    "get_tenant_sandbox",
     "clean_child_env",
     "write_token_file",
     "shard_for_user",

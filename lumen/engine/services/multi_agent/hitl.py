@@ -59,8 +59,17 @@ def _hmac_secret() -> bytes:
     return hashlib.sha256(configured.encode("utf-8")).digest()
 
 
-def _sign(action_id: str, state_id: str, tool: str, user_id: int, expires_at: float) -> str:
-    msg = f"{action_id}|{state_id}|{tool}|{user_id}|{int(expires_at)}".encode()
+def _sign(
+    action_id: str,
+    state_id: str,
+    tool: str,
+    user_id: int,
+    expires_at: float,
+    principal_id: str = "",
+) -> str:
+    msg = (
+        f"{action_id}|{state_id}|{tool}|{user_id}|{principal_id}|{int(expires_at)}"
+    ).encode()
     return hmac.new(_hmac_secret(), msg, hashlib.sha256).hexdigest()[:24]
 
 
@@ -88,14 +97,18 @@ class PendingAction:
     params_digest: str = ""  # hash of real params for integrity
     reason: str = ""
     risk: str = "high"
-    confirm_token: str = ""  # HMAC one-time
+    confirm_token: str = field(default="", repr=False)  # transient HMAC; never serialized
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0.0
     status: str = "pending"  # pending | confirmed | rejected | expired | consumed
     nonce: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        # The signed bearer token is derived from immutable pending-action
+        # fields and the server secret. Never persist the raw token in state.
+        data = asdict(self)
+        data.pop("confirm_token", None)
+        return data
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "PendingAction":
@@ -188,7 +201,10 @@ def request_confirmation(
     action_id = secrets.token_hex(6)
     nonce = secrets.token_hex(4)
     expires = time.time() + _ttl_seconds()
-    token = _sign(action_id, state.state_id, tool, int(state.user_id or 0), expires)
+    token = _sign(
+        action_id, state.state_id, tool, int(state.user_id or 0), expires,
+        principal_id=state.principal_id,
+    )
     risk = tool_risk(tool)
 
     pending = PendingAction(
@@ -215,7 +231,6 @@ def request_confirmation(
         "tool": pending.tool,
         "risk": risk,
         "requires_confirmation": True,
-        "token_prefix": token[:6],
     }
     try:
         state.transition(
@@ -233,9 +248,8 @@ def request_confirmation(
         f"المستوى: **{risk}**\n"
         f"السبب: {pending.reason}\n"
         f"المعرّف: `{action_id}`\n"
-        f"رمز التحقق: `{token}`\n"
-        f"للتأكيد أرسل:\n`تأكيد {action_id} {token}`\n"
-        f"للرفض:\n`رفض {action_id}`\n"
+        f"للتأكيد اضغط الزر أو أرسل: `تأكيد {action_id}`\n"
+        f"للرفض: `رفض {action_id}`\n"
         f"الصلاحية: {int(_ttl_seconds() // 60)} دقيقة"
     )
     state.record(AgentRole.HITL, "awaiting_confirmation", f"{pending.tool}:{action_id}:risk={risk}")
@@ -251,10 +265,29 @@ def _load_pending(state: AgentState) -> Optional[PendingAction]:
     return PendingAction.from_dict(raw)
 
 
+def confirmation_token_for_state(state: AgentState | None) -> str:
+    """Re-derive the pending HMAC for the owner without storing it in the DB."""
+    if state is None:
+        return ""
+    pending = _load_pending(state)
+    if pending is None or pending.status != "pending" or pending.is_expired():
+        return ""
+    # Re-derive rather than returning a legacy raw token loaded from old state.
+    return _sign(
+        pending.action_id,
+        pending.state_id,
+        pending.tool,
+        pending.user_id,
+        pending.expires_at,
+        principal_id=state.principal_id,
+    )
+
+
 def _consume_token(action_id: str, token: str) -> bool:
     """Single-use confirm token — Redis in production, process set in dev."""
-    key = f"{action_id}:{token}"
-    redis_key = f"lumen:hitl:consumed:{action_id}:{token[:32]}"
+    token_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    key = f"{action_id}:{token_digest}"
+    redis_key = f"lumen:hitl:consumed:{action_id}:{token_digest}"
     try:
         from lumen.platform.redis_client import connect_redis_url
         from lumen.platform.runtime_config import redis_url
@@ -290,6 +323,7 @@ def confirm_action(
     action_id: str,
     *,
     user_id: int = 0,
+    principal_id: str | None = None,
     confirm_token: str = "",
     board: BlackboardStore | None = None,
 ) -> tuple[bool, AgentState | None, str]:
@@ -304,9 +338,13 @@ def confirm_action(
         return False, None, "state_not_found"
     supplied_uid = int(user_id or 0)
     owner_uid = int(state.user_id or 0)
+    expected_principal = str(principal_id or f"telegram:{supplied_uid}")
     if supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid:
         _audit("confirm_fail", reason="user_mismatch", action_id=action_id, user_id=supplied_uid)
         return False, state, "user_mismatch"
+    if state.principal_id != expected_principal:
+        _audit("confirm_fail", reason="principal_mismatch", action_id=action_id, user_id=supplied_uid)
+        return False, state, "principal_mismatch"
 
     pending = _load_pending(state)
     if pending is None or pending.action_id != action_id:
@@ -332,7 +370,8 @@ def confirm_action(
     expected = (pending.confirm_token or "").strip()
     if not expected:
         expected = _sign(
-            pending.action_id, pending.state_id, pending.tool, pending.user_id, pending.expires_at
+            pending.action_id, pending.state_id, pending.tool, pending.user_id,
+            pending.expires_at, principal_id=state.principal_id,
         )
     supplied = (confirm_token or "").strip()
     if not supplied or not hmac.compare_digest(str(supplied), str(expected)):
@@ -353,6 +392,7 @@ def confirm_action(
         "action_id": action_id,
         "tool": pending.tool,
         "user_id": int(pending.user_id or state.user_id or 0),
+        "principal_id": str(state.principal_id),
         "params_digest": str(pending.params_digest or ""),
         "granted_at": time.time(),
         "single_use": True,
@@ -372,6 +412,7 @@ def reject_action(
     action_id: str,
     *,
     user_id: int = 0,
+    principal_id: str | None = None,
     board: BlackboardStore | None = None,
 ) -> tuple[bool, AgentState | None, str]:
     board = board or get_blackboard()
@@ -380,8 +421,11 @@ def reject_action(
         return False, None, "state_not_found"
     supplied_uid = int(user_id or 0)
     owner_uid = int(state.user_id or 0)
+    expected_principal = str(principal_id or f"telegram:{supplied_uid}")
     if supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid:
         return False, state, "user_mismatch"
+    if state.principal_id != expected_principal:
+        return False, state, "principal_mismatch"
     pending = _load_pending(state)
     # Verb-only reject: action_id may be empty — accept the sole pending action
     if pending is not None and not (action_id or "").strip():
@@ -441,9 +485,10 @@ def consume_execute_grant(
     tool: str,
     *,
     user_id: int = 0,
+    principal_id: str | None = None,
     params: dict | None = None,
 ) -> bool:
-    """Single-use grant after confirm — bound to user_id + tool + params_digest."""
+    """Single-use grant bound to principal, user, tool, and full params digest."""
     grant = (state.extensions or {}).get("hitl_execute_grant")
     if not isinstance(grant, dict):
         return False
@@ -457,6 +502,11 @@ def consume_execute_grant(
     # positive owner match; zero must never act as a wildcard.
     if uid <= 0 or grant_uid <= 0 or grant_uid != uid:
         state.record(AgentRole.HITL, "grant_user_mismatch", tool)
+        return False
+    expected_principal = str(principal_id or state.principal_id or "")
+    grant_principal = str(grant.get("principal_id") or "")
+    if not expected_principal or grant_principal != expected_principal or state.principal_id != expected_principal:
+        state.record(AgentRole.HITL, "grant_principal_mismatch", tool)
         return False
     expected_digest = str(grant.get("params_digest") or "")
     if expected_digest:

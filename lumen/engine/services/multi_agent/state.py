@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class AgentStatus(str, Enum):
@@ -153,6 +153,8 @@ class AgentState:
     schema_version: int = SCHEMA_VERSION
     state_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
     user_id: int = 0
+    # Stable, namespaced security principal (e.g. telegram:123 or tenant:acme).
+    principal_id: str = ""
     user_text: str = ""
     status: str = AgentStatus.PENDING.value
 
@@ -182,6 +184,15 @@ class AgentState:
     events: list[AgentEvent] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+
+    def __post_init__(self) -> None:
+        if not self.principal_id:
+            # New AgentState instances default to the Telegram principal.
+            # from_dict() explicitly marks records without this field as legacy.
+            self.principal_id = f"telegram:{int(self.user_id or 0)}"
+        self.principal_id = str(self.principal_id).strip()
+        if not self.principal_id or len(self.principal_id) > 256:
+            raise ValueError("invalid_principal_id")
 
     def touch(self) -> None:
         self.updated_at = time.time()
@@ -238,6 +249,7 @@ class AgentState:
             "schema_version": self.schema_version,
             "state_id": self.state_id,
             "user_id": self.user_id,
+            "principal_id": self.principal_id,
             "user_text": (self.user_text or "")[:500],
             "status": self.status,
             "user_intent": self.user_intent,
@@ -263,11 +275,15 @@ class AgentState:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "AgentState":
+        stored_version = int(d.get("schema_version") or 1)
+        if stored_version > SCHEMA_VERSION:
+            raise ValueError("unsupported_agent_state_schema")
         events = [AgentEvent.from_dict(e) for e in (d.get("events") or []) if isinstance(e, dict)]
         return cls(
-            schema_version=int(d.get("schema_version") or SCHEMA_VERSION),
+            schema_version=SCHEMA_VERSION,
             state_id=str(d.get("state_id") or uuid.uuid4().hex[:16]),
             user_id=int(d.get("user_id") or 0),
+            principal_id=str(d.get("principal_id") or f"legacy:user:{int(d.get('user_id') or 0)}"),
             user_text=str(d.get("user_text") or ""),
             status=str(d.get("status") or AgentStatus.PENDING.value),
             user_intent=str(d.get("user_intent") or ""),

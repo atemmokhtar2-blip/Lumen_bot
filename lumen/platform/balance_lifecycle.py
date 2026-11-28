@@ -282,12 +282,18 @@ def _snapshot_and_stop(tenant_id: str) -> dict[str, Any]:
             from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                 FirecrackerSandboxBackend,
             )
-            fc = FirecrackerSandboxBackend()
             tid_str = str(tenant_id)
             for vm in list_managed_firecracker_vms():
-                uid = str(vm.get("user_id") or "")
-                # tenant_id may equal user_id in consumer path
-                if uid and uid != tid_str and tid_str not in str(vm.get("id") or ""):
+                vm_tenant = str(vm.get("tenant_id") or "")
+                vm_user = int(vm.get("user_id") or 0)
+                # B2B is matched by exact tenant ID. Consumer Telegram VMs are
+                # matched only by the explicit tg:<user_id> owner namespace.
+                if vm_tenant:
+                    if vm_tenant != tid_str:
+                        continue
+                elif tid_str != f"tg:{vm_user}":
+                    # Legacy unbound VM metadata is accepted only for the
+                    # explicit Telegram account namespace, never numeric tenant IDs.
                     continue
                 vid = str(vm.get("id") or "")
                 if not vid:
@@ -299,10 +305,12 @@ def _snapshot_and_stop(tenant_id: str) -> dict[str, Any]:
                     "backend": "firecracker",
                 })
                 try:
-                    fc.stop(vid)
+                    FirecrackerSandboxBackend(
+                        user_id=vm_user, tenant_id=vm_tenant
+                    ).stop(vid)
                     stopped += 1
                 except Exception:
-                    pass
+                    logger.warning("tenant-scoped Firecracker stop failed vm=%s", vid[:24])
         except Exception as fc_exc:
             logger.warning("fc snapshot_stop: %s", type(fc_exc).__name__)
     except Exception as exc:

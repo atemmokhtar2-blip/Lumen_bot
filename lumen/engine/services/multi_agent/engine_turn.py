@@ -654,13 +654,16 @@ def handle_user_turn(
         msg = (state.final_message or "").strip() or (
             f"يتطلب تأكيد لتنفيذ `{tool}`. اكتب: تأكيد أو رفض."
         )
+        from .hitl import confirmation_token_for_state
+
+        confirm_token = confirmation_token_for_state(state)
         updates: dict[str, Any] = {
             "multi_agent_state_id": state.state_id,
             "multi_agent_pending": {
                 "action_id": pending.get("action_id"),
                 "state_id": state.state_id,
                 "tool": tool,
-                "confirm_token": pending.get("confirm_token"),
+                "confirm_token": confirm_token,
             },
         }
         return EngineTurnResult(

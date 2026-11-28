@@ -10,6 +10,7 @@ Strong path: real probes, not theatre. No vendor names in user alerts.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import threading
@@ -74,7 +75,10 @@ def check_instance(inst, *, get_backend_status: Callable | None = None) -> tuple
             FirecrackerSandboxBackend,
         )
 
-        b = FirecrackerSandboxBackend()
+        b = FirecrackerSandboxBackend(
+            user_id=int(getattr(inst, "user_id", 0) or 0),
+            tenant_id=str(getattr(inst, "tenant_id", "") or ""),
+        )
         if not hasattr(b, "status"):
             return True, "backend_no_status_method"
         handle = b.status(dep)
@@ -119,7 +123,11 @@ def _try_auto_repair(hosting_service, inst) -> bool:
             path,
             bot_token=token,
             user_id=int(getattr(inst, "user_id", 0) or 0),
-            service_name=f"lumen-u{int(getattr(inst, 'user_id', 0) or 0)}-heal",
+            tenant_id=str(getattr(inst, "tenant_id", "") or ""),
+            service_name=(
+                f"lumen-t{hashlib.sha256(str(getattr(inst, 'tenant_id', '') or '').encode()).hexdigest()[:10]}-"
+                f"u{int(getattr(inst, 'user_id', 0) or 0)}-heal"
+            ),
         )
         diag["last_auto_repair_at"] = time.time()
         if not rep.ok:
@@ -245,6 +253,8 @@ def run_once(hosting_service) -> dict:
             aggregate_and_ship(
                 str(getattr(inst, "instance_id", "")),
                 str(getattr(inst, "deployment_id", "") or ""),
+                user_id=int(getattr(inst, "user_id", 0) or 0),
+                tenant_id=str(getattr(inst, "tenant_id", "") or ""),
             )
         except Exception:
             pass
@@ -256,7 +266,10 @@ def run_once(hosting_service) -> dict:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                     FirecrackerSandboxBackend,
                 )
-                FirecrackerSandboxBackend().stop(dep)
+                FirecrackerSandboxBackend(
+                    user_id=int(getattr(inst, "user_id", 0) or 0),
+                    tenant_id=str(getattr(inst, "tenant_id", "") or ""),
+                ).stop(dep)
         except Exception:
             pass
     try:

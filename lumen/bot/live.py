@@ -85,6 +85,7 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
             bot_token=token,
             entry_hint=entry or None,
             run_seconds=run_seconds,
+            user_id=int(message.from_user.id if message.from_user else 0),
         )
 
     try:

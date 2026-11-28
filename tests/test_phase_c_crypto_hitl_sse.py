@@ -54,10 +54,12 @@ def test_hitl_grant_requires_params_when_digest_set():
     digest = _params_digest(params)
     state = SimpleNamespace(
         user_id=42,
+        principal_id="telegram:42",
         extensions={
             "hitl_execute_grant": {
                 "tool": "git_push",
                 "user_id": 42,
+                "principal_id": "telegram:42",
                 "params_digest": digest,
                 "single_use": True,
             }
@@ -69,6 +71,7 @@ def test_hitl_grant_requires_params_when_digest_set():
     state.extensions["hitl_execute_grant"] = {
         "tool": "git_push",
         "user_id": 42,
+        "principal_id": "telegram:42",
         "params_digest": digest,
         "single_use": True,
     }

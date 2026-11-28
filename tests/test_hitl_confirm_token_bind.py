@@ -92,6 +92,7 @@ def test_execution_grant_rejects_missing_or_mismatched_user():
     state.extensions["hitl_execute_grant"] = {
         "tool": "host_start",
         "user_id": 42,
+        "principal_id": "telegram:42",
         "params_digest": _params_digest(params),
         "single_use": True,
     }
@@ -101,6 +102,7 @@ def test_execution_grant_rejects_missing_or_mismatched_user():
     assert "hitl_execute_grant" in state.extensions
 
     state.user_id = 42
+    state.principal_id = "telegram:42"
     assert consume_execute_grant(
         state, "host_start", user_id=42, params=params
     )
@@ -113,6 +115,7 @@ def test_execution_grant_rejects_zero_owner():
     state.extensions["hitl_execute_grant"] = {
         "tool": "host_start",
         "user_id": 0,
+        "principal_id": "telegram:0",
         "params_digest": _params_digest(params),
         "single_use": True,
     }
@@ -137,3 +140,49 @@ def test_reject_action_requires_exact_positive_owner():
     )
     assert not ok
     assert reason == "user_mismatch"
+
+
+def test_raw_confirmation_token_is_not_persisted_in_agent_state():
+    from lumen.engine.services.multi_agent.hitl import confirmation_token_for_state
+
+    board = MemoryBlackboard()
+    state = AgentState(user_id=77, status=AgentStatus.PLANNING.value)
+    board.put(state)
+    pending = request_confirmation(
+        state,
+        tool="langgraph_plan_approve",
+        params={"plan": "safe"},
+        reason="token persistence regression",
+        board=board,
+    )
+
+    persisted = board.get(state.state_id)
+    assert persisted is not None
+    stored_pending = persisted.extensions["pending_action"]
+    assert "confirm_token" not in stored_pending
+    assert pending.confirm_token not in (persisted.final_message or "")
+    assert confirmation_token_for_state(persisted) == pending.confirm_token
+
+    ok, _, reason = confirm_action(
+        state.state_id,
+        pending.action_id,
+        user_id=77,
+        confirm_token=pending.confirm_token,
+        board=board,
+    )
+    assert ok, reason
+
+
+
+def test_confirmation_hmac_is_namespaced_by_principal():
+    from lumen.engine.services.multi_agent.hitl import _sign
+
+    telegram = _sign(
+        "action", "state", "host_start", 42, 1_900_000_000,
+        principal_id="telegram:42",
+    )
+    tenant = _sign(
+        "action", "state", "host_start", 42, 1_900_000_000,
+        principal_id="tenant:acme",
+    )
+    assert telegram != tenant

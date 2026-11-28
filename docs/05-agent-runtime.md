@@ -47,3 +47,11 @@
 ## user_id
 
 يُمرَّر من البوت عبر multi-agent / coding_agent / temporal stages حتى الإلغاء والجلسة يبقيان صحيحين على workers منفصلة.
+
+## الاستمرارية بين العمليات والخوادم
+
+- في الإنتاج، `PostgresSaver` الرسمي من LangGraph يحفظ checkpoints في PostgreSQL المشترك؛ لا يعتمد استئناف HITL على ملف SQLite محلي أو ذاكرة عملية واحدة.
+- `PostgresBlackboardStore` يحفظ سجل `AgentState` في جدول `lumen_agent_states` بصيغة JSONB، حتى يتمكن webhook من استرجاع حالة أنشأها عامل RQ أو replica أخرى.
+- `DATABASE_URL` أو `POSTGRES_URL` مطلوب في الإنتاج. فشل إنشاء الاتصال أو checkpoint يوقف مسار الاستعادة بوضوح؛ لا يوجد fallback إلى ملف محلي أو `MemorySaver` في الإنتاج.
+- SQLite و`MemorySaver` مخصصان للتطوير المحلي والاختبارات فقط. `LANGGRAPH_CHECKPOINT_PATH` يغيّر مسار SQLite المحلي ولا يغيّر backend الإنتاج.
+

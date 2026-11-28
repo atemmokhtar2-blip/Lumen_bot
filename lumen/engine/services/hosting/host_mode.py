@@ -15,6 +15,7 @@ Env:
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from enum import Enum
@@ -102,6 +103,7 @@ def allocate_public_url(
     *,
     slug: str,
     instance_id: str = "",
+    tenant_id: str = "",
     scheme: UrlScheme | None = None,
 ) -> dict[str, Any]:
     """Allocate public_url + health_url for a hosted project.
@@ -110,6 +112,10 @@ def allocate_public_url(
     """
     base = public_base()
     slug_n = normalize_slug(slug or instance_id or "app")
+    tenant = str(tenant_id or "").strip()
+    if tenant:
+        suffix = hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:10]
+        slug_n = normalize_slug(f"{slug_n[:37]}-{suffix}")
     sch = scheme or url_scheme()
     hp = health_path()
 
@@ -155,9 +161,12 @@ def registry_fields(
     slug: str,
     instance_id: str = "",
     language: str = "python",
+    tenant_id: str = "",
 ) -> dict[str, Any]:
     """Fields to persist on HostInstance for unified plane."""
-    urls = allocate_public_url(slug=slug, instance_id=instance_id)
+    urls = allocate_public_url(
+        slug=slug, instance_id=instance_id, tenant_id=tenant_id
+    )
     return {
         "host_mode": host_mode.value,
         "project_kind": (project_kind or "").strip().lower(),

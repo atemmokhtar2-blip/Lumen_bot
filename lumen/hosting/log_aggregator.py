@@ -38,6 +38,8 @@ def collect_instance_logs(
     *,
     limit: int = 200,
     project_path: str = "",
+    user_id: int = 0,
+    tenant_id: str = "",
 ) -> list[str]:
     lines: list[str] = []
     dep = (deployment_id or "").strip()
@@ -48,7 +50,9 @@ def collect_instance_logs(
             )
 
             lines = list(
-                FirecrackerSandboxBackend().logs(dep, limit=max(10, min(500, limit))) or []
+                FirecrackerSandboxBackend(
+                    user_id=int(user_id or 0), tenant_id=str(tenant_id or "")
+                ).logs(dep, limit=max(10, min(500, limit))) or []
             )
         except Exception as exc:
             lines = ["log_collect_error:%s" % type(exc).__name__]
@@ -158,9 +162,21 @@ def ship_to_elasticsearch(instance_id: str, lines: list[str]) -> bool:
         return False
 
 
-def aggregate_and_ship(instance_id: str, deployment_id: str, *, limit: int = 100, project_path: str = "") -> dict[str, Any]:
-    lines = collect_instance_logs(instance_id, deployment_id, limit=limit, project_path=project_path)
-    loki = ship_to_loki(instance_id, lines)
+def aggregate_and_ship(
+    instance_id: str,
+    deployment_id: str,
+    *,
+    limit: int = 100,
+    project_path: str = "",
+    user_id: int = 0,
+    tenant_id: str = "",
+) -> dict[str, Any]:
+    lines = collect_instance_logs(
+        instance_id, deployment_id, limit=limit, project_path=project_path,
+        user_id=user_id, tenant_id=tenant_id,
+    )
+    labels = {"tenant_id": tenant_id} if tenant_id else {}
+    loki = ship_to_loki(instance_id, lines, labels=labels)
     es = ship_to_elasticsearch(instance_id, lines)
     return {"lines": len(lines), "loki": loki, "elasticsearch": es}
 
@@ -180,6 +196,8 @@ def aggregate_all_running(hosting_service, *, limit: int = 80) -> dict[str, Any]
             str(getattr(inst, "deployment_id", "") or ""),
             limit=limit,
             project_path=str(getattr(inst, "project_path", "") or ""),
+            user_id=int(getattr(inst, "user_id", 0) or 0),
+            tenant_id=str(getattr(inst, "tenant_id", "") or ""),
         )
         stats["lines"] += int(r.get("lines") or 0)
         stats["loki"] += 1 if r.get("loki") else 0

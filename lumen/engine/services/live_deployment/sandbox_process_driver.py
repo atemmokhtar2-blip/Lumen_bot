@@ -30,6 +30,23 @@ def _user_id_from_env(env_vars: Optional[Dict[str, str]]) -> int:
     return 0
 
 
+def _tenant_id_from_env(env_vars: Optional[Dict[str, str]]) -> str:
+    if not env_vars:
+        return ""
+    return str(
+        env_vars.get("LUMEN_TENANT_ID")
+        or env_vars.get("TENANT_ID")
+        or ""
+    ).strip()
+
+
+def _user_id_from_deployment_id(deployment_id: str) -> int:
+    parts = str(deployment_id or "").split("-", 2)
+    if len(parts) >= 3 and parts[0] == "fc" and parts[1].isdigit():
+        return int(parts[1])
+    return 0
+
+
 def _token_from_env(env_vars: Optional[Dict[str, str]]) -> str:
     if not env_vars:
         return ""
@@ -64,6 +81,7 @@ class SandboxProcessDriver(DeploymentProvider):
                 project_path=str(project_path),
                 bot_token=token,
                 user_id=_user_id_from_env(env_vars),
+                tenant_id=_tenant_id_from_env(env_vars),
                 service_name=service_name or "generated-bot",
                 env_vars=dict(env_vars or {}),
             )
@@ -95,7 +113,10 @@ class SandboxProcessDriver(DeploymentProvider):
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                     FirecrackerSandboxBackend,
                 )
-                h = FirecrackerSandboxBackend().status(dep)
+                uid = _user_id_from_deployment_id(dep)
+                if uid <= 0:
+                    raise RuntimeError("firecracker_owner_context_required")
+                h = FirecrackerSandboxBackend(user_id=uid).status(dep)
             else:
                 from lumen.engine.services.sandbox_runtime import select_sandbox_backend
 
@@ -123,7 +144,10 @@ class SandboxProcessDriver(DeploymentProvider):
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                     FirecrackerSandboxBackend,
                 )
-                h = FirecrackerSandboxBackend().stop(dep)
+                uid = _user_id_from_deployment_id(dep)
+                if uid <= 0:
+                    raise RuntimeError("firecracker_owner_context_required")
+                h = FirecrackerSandboxBackend(user_id=uid).stop(dep)
             else:
                 from lumen.engine.services.sandbox_runtime import select_sandbox_backend
 
@@ -182,7 +206,10 @@ class SandboxProcessDriver(DeploymentProvider):
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                     FirecrackerSandboxBackend,
                 )
-                return FirecrackerSandboxBackend().logs(dep, limit=limit)
+                uid = _user_id_from_deployment_id(dep)
+                if uid <= 0:
+                    return []
+                return FirecrackerSandboxBackend(user_id=uid).logs(dep, limit=limit)
             from lumen.engine.services.sandbox_runtime import select_sandbox_backend
 
             backend, _ = select_sandbox_backend(require_available=False)

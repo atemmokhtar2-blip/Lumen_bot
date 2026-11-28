@@ -166,7 +166,7 @@ def test_firecracker_bootargs_token_forbidden_in_production(monkeypatch):
             FirecrackerSandboxBackend,
         )
         from lumen.engine.services.sandbox_runtime.types import SandboxSpec
-        h = FirecrackerSandboxBackend().start(
+        h = FirecrackerSandboxBackend(user_id=1).start(
             SandboxSpec(project_path="/tmp/p", bot_token="1:tok", user_id=1)
         )
         assert h.status == "failed"
@@ -419,11 +419,11 @@ def test_wait_for_bot_health_fatal(tmp_path):
 def test_fc_status_fatal_not_running(tmp_path, monkeypatch):
     import json, os
     from lumen.engine.services.sandbox_runtime.firecracker_backend import FirecrackerSandboxBackend
-    b = FirecrackerSandboxBackend()
-    vm_id = "fc-0-testhealth"
+    b = FirecrackerSandboxBackend(user_id=1)
+    vm_id = "fc-1-testhealth"
     log = tmp_path / "vm.log"
     log.write_text("lumen-guest-ready\nlumen-bot-fatal token_missing\n")
-    meta = {"pid": os.getpid(), "log": str(log), "vm_id": vm_id}
+    meta = {"pid": os.getpid(), "log": str(log), "vm_id": vm_id, "user_id": 1}
     # write meta where backend expects
     b._state_dir.mkdir(parents=True, exist_ok=True)
     (b._state_dir / f"{vm_id}.json").write_text(json.dumps(meta), encoding="utf-8")

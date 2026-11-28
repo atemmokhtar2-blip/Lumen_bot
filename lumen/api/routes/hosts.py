@@ -136,7 +136,7 @@ async def host_start(request: web.Request) -> web.Response:
 
     svc = get_hosting_service()
     uid = _tenant_user_id(tenant.tenant_id)
-    current = len(svc.list_for_user(uid))
+    current = len(svc.list_for_user(uid, tenant_id=tenant.tenant_id))
     ok, reason = get_billing().enforce_hosting(tenant.tenant_id, current)
     if not ok:
         raise web.HTTPPaymentRequired(
@@ -212,7 +212,7 @@ async def host_stop(request: web.Request) -> web.Response:
 async def host_status(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
     uid = _tenant_user_id(tenant.tenant_id)
-    instances = get_hosting_service().list_for_user(uid)
+    instances = get_hosting_service().list_for_user(uid, tenant_id=tenant.tenant_id)
     return web.json_response(
         {
             "ok": True,
@@ -245,7 +245,7 @@ async def host_diagnose(request: web.Request) -> web.Response:
     uid = _tenant_user_id(tenant.tenant_id)
     result = await asyncio.to_thread(
         lambda: get_hosting_service().diagnose(
-            user_id=uid, instance_id=instance_id or None
+            user_id=uid, instance_id=instance_id or None, tenant_id=tenant.tenant_id
         )
     )
     return web.json_response(
@@ -310,7 +310,7 @@ async def host_logs(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text='{"error":"instance_id_required"}', content_type="application/json")
     uid = _tenant_user_id(tenant.tenant_id)
     result = await asyncio.to_thread(
-        lambda: get_hosting_service().logs(user_id=uid, instance_id=instance_id, limit=limit)
+        lambda: get_hosting_service().logs(user_id=uid, instance_id=instance_id, limit=limit, tenant_id=tenant.tenant_id)
     )
     return web.json_response(
         {
@@ -348,6 +348,7 @@ async def host_redeploy(request: web.Request) -> web.Response:
             bot_token=bot_token,
             bot_username=inst.bot_username or "",
             entry_point=getattr(inst, "entry_point", "") or "",
+            tenant_id=tenant.tenant_id,
         )
     )
     return web.json_response(
@@ -385,7 +386,7 @@ async def host_delete(request: web.Request) -> web.Response:
         svc._instances.pop(instance_id, None)
         svc._save()
         from lumen.engine.services.hosting.redis_state import delete_instance
-        delete_instance(instance_id, user_id=uid)
+        delete_instance(instance_id, user_id=uid, tenant_id=tenant.tenant_id)
     except Exception:
         pass
     return web.json_response({"ok": True, "message": "instance_deleted", "instance_id": instance_id})

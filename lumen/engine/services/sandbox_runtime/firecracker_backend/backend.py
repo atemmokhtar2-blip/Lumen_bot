@@ -48,18 +48,27 @@ class FirecrackerSandboxBackend(SandboxBackend):
     strength = 100
 
     def __init__(self, *, user_id: int = 0, tenant_id: str = "") -> None:
-        try:
-            from lumen.platform.tenant_isolation import firecracker_state_dir
+        from lumen.platform.tenant_isolation import firecracker_state_dir
+        self._user_id = int(user_id or 0)
+        self._tenant_id = str(tenant_id or "").strip()
+        if self._user_id or self._tenant_id:
             self._state_dir = firecracker_state_dir(
-                user_id=int(user_id or 0),
-                tenant_id=str(tenant_id or ""),
+                user_id=self._user_id,
+                tenant_id=self._tenant_id,
             )
-        except Exception:
+        elif _production_isolation():
+            # Probe-only backend construction has no owner context. It may inspect
+            # host capabilities but cannot start/stop/read a tenant VM.
             self._state_dir = Path(
                 os.environ.get("TBE_FC_STATE_DIR")
                 or os.path.join(os.environ.get("OUTPUT_DIR") or "/tmp", "fc_vms")
             )
-            self._state_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self._state_dir = firecracker_state_dir()
+
+    def _require_owner_context(self) -> None:
+        if _production_isolation() and not (self._user_id or self._tenant_id):
+            raise RuntimeError("firecracker_owner_context_required")
 
     def _api_socket(self, vm_id: str) -> Path:
         return self._state_dir / f"{vm_id}.sock"
@@ -130,6 +139,16 @@ class FirecrackerSandboxBackend(SandboxBackend):
         return SandboxProbe(self.name, True, "firecracker_prereqs_ok", self.strength)
 
     def start(self, spec: SandboxSpec) -> SandboxHandle:
+        self._require_owner_context()
+        if self._user_id and int(spec.user_id or 0) != self._user_id:
+            return SandboxHandle(
+                self.name, "", status="failed", message="firecracker_user_owner_mismatch"
+            )
+        spec_tenant = str(getattr(spec, "tenant_id", "") or "").strip()
+        if self._tenant_id != spec_tenant:
+            return SandboxHandle(
+                self.name, "", status="failed", message="firecracker_tenant_owner_mismatch"
+            )
         probe = self.probe()
         if not probe.available:
             return SandboxHandle(
@@ -472,6 +491,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
             "token_drive": str(token_drive) if token_drive.is_file() else "",
             "log": str(log_path),
             "user_id": spec.user_id,
+            "tenant_id": str(getattr(spec, "tenant_id", "") or self._tenant_id),
             "project_path": spec.project_path,
             "token_fp": hashlib.sha256(spec.bot_token.encode()).hexdigest()[:16],
             "network_tap": bool(tap),
@@ -880,6 +900,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
             shutil.rmtree(jail, ignore_errors=True)
 
     def stop(self, handle_or_id: str) -> SandboxHandle:
+        self._require_owner_context()
         meta_p = self._meta_path(handle_or_id)
         if meta_p.exists():
             try:
@@ -982,6 +1003,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
         return guest_ready, bot_started
 
     def status(self, handle_or_id: str) -> SandboxHandle:
+        self._require_owner_context()
         meta_p = self._meta_path(handle_or_id)
         if not meta_p.exists():
             return SandboxHandle(self.name, handle_or_id, status="stopped", message="no_meta")
@@ -1058,6 +1080,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
             return SandboxHandle(self.name, handle_or_id, status="unknown", message=str(exc)[:120])
 
     def logs(self, handle_or_id: str, *, limit: int = 50) -> List[str]:
+        self._require_owner_context()
         meta_p = self._meta_path(handle_or_id)
         if not meta_p.exists():
             return []

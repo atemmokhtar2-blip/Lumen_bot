@@ -74,7 +74,7 @@ def test_confirm_verb_only_with_user_data(board):
             "tool": "langgraph_plan_approve",
         },
     }
-    handled, reply = try_handle_hitl_message("تأكيد", user_id=7, user_data=ud)
+    handled, reply, _state = try_handle_hitl_message("تأكيد", user_id=7, user_data=ud)
     assert handled is True
     # confirm_action must succeed; continue may fail without full langgraph graph — still not bad_token
     assert "bad_token" not in reply
@@ -89,7 +89,7 @@ def test_confirm_recovers_token_from_board_when_user_data_empty(board):
 
     st, pending = _make_pending_state(user_id=9)
     ud = {"multi_agent_state_id": st.state_id}  # no pending dict / no token
-    handled, reply = try_handle_hitl_message("تأكيد", user_id=9, user_data=ud)
+    handled, reply, _state = try_handle_hitl_message("تأكيد", user_id=9, user_data=ud)
     assert handled is True
     assert "بيانات الموافقة ناقصة" not in reply
     assert "bad_token" not in reply
@@ -109,7 +109,7 @@ def test_reject_verb_only(board):
             "tool": "langgraph_plan_approve",
         },
     }
-    handled, reply = try_handle_hitl_message("رفض", user_id=11, user_data=ud)
+    handled, reply, _state = try_handle_hitl_message("رفض", user_id=11, user_data=ud)
     assert handled is True
     assert "تعذر الرفض" not in reply
     live = get_blackboard().get(st.state_id)
@@ -152,8 +152,21 @@ def test_keyboard_builds_hitl_buttons():
     assert kb is not None
     # InlineKeyboardMarkup with 2 buttons
     rows = kb.inline_keyboard
-    assert len(rows) == 1
-    assert len(rows[0]) == 2
-    texts = {b.text for b in rows[0]}
+    buttons = [button for row in rows for button in row]
+    assert len(buttons) >= 2
+    texts = {button.text for button in buttons}
     assert any("تأكيد" in t for t in texts)
     assert any("رفض" in t for t in texts)
+
+
+def test_other_user_cannot_hydrate_pending_confirmation_token(board):
+    from lumen.bot.multi_agent_bridge import try_handle_hitl_message
+
+    st, _pending = _make_pending_state(user_id=311)
+    user_data = {"multi_agent_state_id": st.state_id}
+
+    handled, _reply, _state = try_handle_hitl_message(
+        "تأكيد", user_id=312, user_data=user_data
+    )
+    assert handled is True
+    assert "multi_agent_pending" not in user_data

@@ -8,7 +8,7 @@ import hashlib
 import os
 from pathlib import Path
 
-from lumen.engine.services.user_sandbox import get_user_sandbox, shard_for_user
+from lumen.engine.services.user_sandbox import get_user_sandbox
 
 
 def output_root() -> Path:
@@ -16,19 +16,20 @@ def output_root() -> Path:
 
 
 def stable_tenant_uid(tenant_id: str) -> int:
-    """Deterministic sandbox user-id for a tenant.
+    """Legacy numeric tenant surrogate for quota/AgentState compatibility.
 
-    NEVER use built-in hash() — it is randomized per process (PYTHONHASHSEED),
-    which would move sandboxes on every restart and orphan running bots.
+    Never use this shortened value as a filesystem isolation boundary. B2B
+    workspace paths are keyed by the full tenant SHA-256 digest.
     """
     digest = hashlib.sha256(str(tenant_id or "").encode("utf-8")).hexdigest()
     return int(digest[:16], 16) % (10**9)
 
 
 def tenant_sandbox_root(tenant_id: str) -> Path:
-    """Filesystem root owned by a B2B tenant (mirrors user sandbox layout)."""
-    uid = stable_tenant_uid(tenant_id)
-    return get_user_sandbox(uid, output_root()).root.resolve()
+    """Filesystem root owned by one B2B tenant, keyed by full SHA-256 digest."""
+    from lumen.engine.services.user_sandbox import get_tenant_sandbox
+
+    return get_tenant_sandbox(tenant_id, output_root()).root.resolve()
 
 
 def is_path_inside(child: Path, parent: Path) -> bool:

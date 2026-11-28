@@ -98,6 +98,7 @@ def start_host(
     project_path: str,
     bot_token: str,
     user_id: int = 0,
+    tenant_id: str = "",
     service_name: str = "",
     env_vars: Optional[dict[str, str]] = None,
     backend: str = "",
@@ -121,6 +122,7 @@ def start_host(
             project_path=project_path,
             bot_token=bot_token,
             user_id=user_id,
+            tenant_id=tenant_id,
             service_name=service_name,
             env_vars=env_vars,
         )
@@ -132,6 +134,7 @@ def start_host(
         project_path=project_path,
         bot_token=bot_token,
         user_id=user_id,
+        tenant_id=tenant_id,
         service_name=service_name,
         env_vars=env_vars,
     )
@@ -304,7 +307,13 @@ def _start_serverless(
     return _ServerlessBackend(), handle
 
 
-def stop_host(deployment_id: str, *, backend: str = "firecracker") -> None:
+def stop_host(
+    deployment_id: str,
+    *,
+    backend: str = "firecracker",
+    user_id: int = 0,
+    tenant_id: str = "",
+) -> None:
     dep = (deployment_id or "").strip()
     if not dep:
         return
@@ -320,7 +329,9 @@ def stop_host(deployment_id: str, *, backend: str = "firecracker") -> None:
         from lumen.engine.services.sandbox_runtime.firecracker_backend import (
             FirecrackerSandboxBackend,
         )
-        FirecrackerSandboxBackend().stop(dep)
+        FirecrackerSandboxBackend(
+            user_id=int(user_id or 0), tenant_id=str(tenant_id or "")
+        ).stop(dep)
         return
     if allow_weak_backend():
         from lumen.engine.services.sandbox_runtime import select_sandbox_backend

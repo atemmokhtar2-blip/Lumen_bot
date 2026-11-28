@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from lumen.platform.paths import default_output_dir as _cm_default_output_dir
 
+import hashlib
 import json
 import logging
 import os
@@ -159,19 +160,23 @@ class HostingService:
             pass
         return list(by_id.values())
 
-    def list_for_user(self, user_id: int) -> list[HostInstance]:
-        out = {i.instance_id: i for i in self._instances.values() if i.user_id == user_id}
+    def list_for_user(self, user_id: int, *, tenant_id: str = "") -> list[HostInstance]:
+        from lumen.platform.tenant_isolation import assert_instance_owner
+
+        out: dict[str, HostInstance] = {}
+        for inst in self._instances.values():
+            if assert_instance_owner(inst, user_id=user_id, tenant_id=tenant_id):
+                out[inst.instance_id] = inst
         try:
             from lumen.engine.services.hosting import redis_state as host_redis
-            for remote in host_redis.list_for_user(int(user_id)):
-                iid = str(remote.get("instance_id") or "")
-                if not iid:
-                    continue
+            for remote in host_redis.list_for_user(int(user_id), tenant_id=tenant_id):
                 inst = self._inst_from_row(remote)
-                out[iid] = inst
-                self._instances[iid] = inst
+                if not assert_instance_owner(inst, user_id=user_id, tenant_id=tenant_id):
+                    continue
+                out[inst.instance_id] = inst
+                self._instances[inst.instance_id] = inst
         except Exception:
-            pass
+            logger.exception("tenant-scoped host list failed")
         return list(out.values())
 
     def get(
@@ -220,8 +225,11 @@ class HostingService:
                     message="tenant_id_required: الاستضافة الدائمة في الإنتاج تتطلب ربط المستأجر",
                 )
         except Exception as _tid_exc:
-            if "tenant_id_required" in str(_tid_exc):
-                raise
+            logger.exception("host tenant binding check failed")
+            return HostResult(
+                ok=False,
+                message=f"تعذر التحقق من هوية المستأجر: {type(_tid_exc).__name__}",
+            )
         # Phase D isolation: verify path under owner sandbox (openat2 when available)
         try:
             from lumen.platform.tenant_isolation import verify_project_under_owner
@@ -233,8 +241,9 @@ class HostingService:
             )
         except ValueError as ve:
             return HostResult(ok=False, message=f"عزل المسار: {ve}")
-        except Exception:
-            path = Path(project_path).resolve()
+        except Exception as exc:
+            logger.exception("host project containment verification failed")
+            return HostResult(ok=False, message=f"تعذر التحقق من عزل المسار: {type(exc).__name__}")
         if not path.is_dir():
             return HostResult(ok=False, message="مسار المشروع غير موجود")
 
@@ -262,14 +271,14 @@ class HostingService:
                 resolve_tenant_id,
             )
             try:
-                _tid_w = resolve_tenant_id(user_id=int(user_id or 0))
+                _tid_w = resolve_tenant_id(tenant_id=tenant_id or "", user_id=int(user_id or 0))
                 if _tid_w:
                     from lumen.platform.credits.onboarding import grant_welcome_credits
 
                     grant_welcome_credits(str(_tid_w))
             except Exception:
                 pass
-            assert_hosting_allowed(user_id=int(user_id or 0))
+            assert_hosting_allowed(tenant_id=tenant_id or "", user_id=int(user_id or 0))
         except Exception as _hg:
             if type(_hg).__name__ == "GenerationBlockedError" or "generation_blocked" in str(_hg) or "hosting" in str(_hg).lower():
                 reason = str(_hg)[:120]
@@ -287,13 +296,20 @@ class HostingService:
         # API layer already checks tenant sandbox; HostService enforces the same
         # invariant so internal callers cannot host another tenant's tree.
         try:
-            from lumen.engine.services.user_sandbox import get_user_sandbox
-            sandbox = get_user_sandbox(int(user_id), self.output_root)
+            from lumen.engine.services.user_sandbox import get_tenant_sandbox, get_user_sandbox
+            sandbox = (
+                get_tenant_sandbox(tenant_id, self.output_root)
+                if (tenant_id or "").strip()
+                else get_user_sandbox(int(user_id), self.output_root)
+            )
             if not sandbox.is_under_sandbox(path):
                 return HostResult(ok=False, message="مسار المشروع خارج مساحة عزل المستخدم")
             try:
                 from lumen.engine.services.disk_quota import enforce_user_quota
-                enforce_user_quota(sandbox.root, user_id=int(user_id))
+                enforce_user_quota(
+                    sandbox.root,
+                    user_id=int(getattr(sandbox, "user_id", user_id) or user_id),
+                )
             except RuntimeError as exc:
                 return HostResult(ok=False, message=f"حصة التخزين ممتلئة: {exc}")
         except Exception:
@@ -659,11 +675,27 @@ class HostingService:
             except Exception:
                 pass
             _env = inject_secrets_env(path, env)
+            # Platform-owned identity always overrides project/env-file values.
+            _env["TBE_USER_ID"] = str(int(user_id or 0))
+            _env["LUMEN_PRINCIPAL_ID"] = (
+                f"tenant:{tenant_id}" if (tenant_id or "").strip()
+                else f"telegram:{int(user_id or 0)}"
+            )
+            if (tenant_id or "").strip():
+                _env["LUMEN_TENANT_ID"] = str(tenant_id)
+            else:
+                _env.pop("LUMEN_TENANT_ID", None)
+            tenant_ref = (
+                hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:12]
+                if (tenant_id or "").strip()
+                else "telegram"
+            )
             _backend, handle = _orch_start(
                 project_path=str(path),
                 bot_token=token_norm,
                 user_id=int(user_id),
-                service_name=f"host-u{user_id}",
+                tenant_id=tenant_id or "",
+                service_name=f"host-{tenant_ref}-u{user_id}",
                 env_vars=_env,
             )
         except Exception as sbx_exc:
@@ -973,6 +1005,21 @@ class HostingService:
 
         Without LUMEN_PUBLIC_BASE: still registers; public_url empty (honest).
         """
+        # Multi-tenant production must not fall back to numeric user sandboxes.
+        try:
+            from lumen.platform.prod_security_gate import is_production_runtime
+            multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+            if is_production_runtime() and multi and not (tenant_id or "").strip():
+                return HostResult(
+                    ok=False,
+                    message="tenant_id_required: استضافة HTTP في الإنتاج تتطلب ربط المستأجر",
+                )
+        except Exception as exc:
+            logger.exception("HTTP host tenant binding check failed")
+            return HostResult(ok=False, message=f"تعذر التحقق من هوية المستأجر: {type(exc).__name__}")
+
         from pathlib import Path as _Path
         import hashlib
         from lumen.engine.services.hosting.host_mode import (
@@ -982,7 +1029,16 @@ class HostingService:
             registry_fields,
         )
 
-        path = _Path(project_path).resolve()
+        try:
+            from lumen.platform.tenant_isolation import verify_project_under_owner
+            path = verify_project_under_owner(
+                user_id=int(user_id),
+                project_path=project_path,
+                tenant_id=tenant_id or "",
+                base_dir=self.output_root,
+            )
+        except Exception as exc:
+            return HostResult(ok=False, message=f"عزل المسار: {type(exc).__name__}")
         if not path.is_dir():
             return HostResult(ok=False, message="مسار المشروع غير موجود")
 
@@ -992,7 +1048,7 @@ class HostingService:
         # Phase 5: hosting credits gate
         try:
             from lumen.platform.credits.guards import assert_hosting_allowed
-            assert_hosting_allowed(user_id=int(user_id))
+            assert_hosting_allowed(tenant_id=tenant_id or "", user_id=int(user_id))
         except Exception as cred_exc:
             from lumen.platform.credits.guards import GenerationBlockedError
             if isinstance(cred_exc, GenerationBlockedError) or "hosting" in str(cred_exc).lower() or "blocked" in str(cred_exc).lower() or "insufficient" in str(cred_exc).lower():
@@ -1001,7 +1057,8 @@ class HostingService:
             from lumen.platform.credits import get_credit_service
             from lumen.engine.security.phase5_bounds import hourly_hosting_credit_cost
             from lumen.platform.rating_engine import reserve_for_hosting
-            tid = f"tg:{int(user_id)}"
+            tid = (tenant_id or "").strip() or f"tg:{int(user_id)}"
+            tenant_ref = hashlib.sha256(tid.encode("utf-8")).hexdigest()[:24]
             host_cost = hourly_hosting_credit_cost(kind)
             if host_cost > 0:
                 res = reserve_for_hosting(
@@ -1009,8 +1066,8 @@ class HostingService:
                     tid,
                     hours=1,
                     ram_mb=128,
-                    reference_id=f"http-host-{user_id}",
-                    idempotency_key=f"reserve-http-{user_id}-{int(time.time()) // 3600}",
+                    reference_id=f"http-host-{tenant_ref}",
+                    idempotency_key=f"reserve-http-{tenant_ref}-{int(time.time()) // 3600}",
                 )
                 if not res.ok and "insufficient" in (getattr(res, "reason", "") or ""):
                     return HostResult(ok=False, message=f"رصيد غير كافٍ للاستضافة ({host_cost} كريدت/ساعة)")
@@ -1025,6 +1082,7 @@ class HostingService:
             language=(language or "python"),
             slug=slug_n,
             instance_id=iid,
+            tenant_id=tenant_id or "",
         )
         # LanguageRuntime (same path as project_kind)
         lang_n = (language or "python").strip().lower() or "python"
@@ -1214,7 +1272,12 @@ class HostingService:
             if dep:
                 try:
                     from lumen.hosting.orchestration import stop_host as _orch_stop
-                    _orch_stop(dep, backend=str(inst.sandbox_backend or "firecracker"))
+                    _orch_stop(
+                        dep,
+                        backend=str(inst.sandbox_backend or "firecracker"),
+                        user_id=int(inst.user_id or 0),
+                        tenant_id=str(inst.tenant_id or ""),
+                    )
                     stopped = True
                 except Exception as fc_exc:
                     inst.last_error = f"fc_stop:{type(fc_exc).__name__}:{fc_exc}"[:300]
@@ -1375,6 +1438,7 @@ class HostingService:
         instance_id: str,
         user_id: int,
         bot_token: str = "",
+        tenant_id: str = "",
     ) -> HostResult:
         """One-shot: re-prepare project (deps/version) then restart same instance_id."""
         inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
@@ -1398,10 +1462,13 @@ class HostingService:
                 message=f"redeploy_prepare:{type(exc).__name__}",
                 instance=inst,
             )
-        return self.restart(instance_id=instance_id, user_id=user_id, bot_token=bot_token)
+        return self.restart(
+            instance_id=instance_id, user_id=user_id, bot_token=bot_token,
+            tenant_id=tenant_id,
+        )
 
     def status(self, *, user_id: int, instance_id: str | None = None, tenant_id: str = "") -> HostResult:
-        items = self.list_for_user(user_id)
+        items = self.list_for_user(user_id, tenant_id=tenant_id)
         if instance_id:
             inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
             if not inst:
@@ -1474,7 +1541,9 @@ class HostingService:
                     pass
             elif dep:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import FirecrackerSandboxBackend
-                b = FirecrackerSandboxBackend()
+                b = FirecrackerSandboxBackend(
+                    user_id=int(inst.user_id or 0), tenant_id=str(inst.tenant_id or "")
+                )
                 raw = b.logs(dep, limit=max(10, min(200, int(limit))))
                 lines = [sanitize_log_text(str(x)) for x in (raw or [])]
         except Exception as exc:
@@ -1570,7 +1639,9 @@ class HostingService:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                     FirecrackerSandboxBackend,
                 )
-                st = FirecrackerSandboxBackend().status(dep)
+                st = FirecrackerSandboxBackend(
+                    user_id=int(inst.user_id or 0), tenant_id=str(inst.tenant_id or "")
+                ).status(dep)
                 if str(st.status).lower() != "running":
                     return False
                 meta = dict(getattr(st, "meta", None) or {})
@@ -1596,13 +1667,17 @@ class HostingService:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                     FirecrackerSandboxBackend,
                 )
-                lines = FirecrackerSandboxBackend().logs(dep, limit=200)
+                lines = FirecrackerSandboxBackend(
+                    user_id=int(inst.user_id or 0), tenant_id=str(inst.tenant_id or "")
+                ).logs(dep, limit=200)
                 run_log = sanitize_log_text("\n".join(lines)[-8000:])
             elif dep:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                     FirecrackerSandboxBackend,
                 )
-                lines = FirecrackerSandboxBackend().logs(dep, limit=200)
+                lines = FirecrackerSandboxBackend(
+                    user_id=int(inst.user_id or 0), tenant_id=str(inst.tenant_id or "")
+                ).logs(dep, limit=200)
                 if lines:
                     run_log = sanitize_log_text("\n".join(lines)[-8000:])
         except Exception:

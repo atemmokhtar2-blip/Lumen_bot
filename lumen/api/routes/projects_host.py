@@ -55,7 +55,7 @@ def _inst_json(i) -> dict:
 async def list_projects(request: web.Request) -> web.Response:
     """GET /v1/projects — list hosted instances for tenant."""
     tenant = require_tenant(request)
-    items = get_hosting_service().list_for_user(_uid(tenant.tenant_id))
+    items = get_hosting_service().list_for_user(_uid(tenant.tenant_id), tenant_id=tenant.tenant_id)
     return web.json_response({"ok": True, "projects": [_inst_json(i) for i in items]})
 
 
@@ -66,7 +66,7 @@ async def project_logs(request: web.Request) -> web.Response:
     limit = int(request.rel_url.query.get("limit") or 100)
     uid = _uid(tenant.tenant_id)
     result = await asyncio.to_thread(
-        lambda: get_hosting_service().logs(user_id=uid, instance_id=instance_id, limit=limit)
+        lambda: get_hosting_service().logs(user_id=uid, instance_id=instance_id, limit=limit, tenant_id=tenant.tenant_id)
     )
     return web.json_response(
         {"ok": result.ok, "id": instance_id, "logs": result.message, "details": result.details},
@@ -87,7 +87,7 @@ async def project_redeploy(request: web.Request) -> web.Response:
         )
     uid = _uid(tenant.tenant_id)
     svc = get_hosting_service()
-    inst = svc.get(instance_id, user_id=uid)
+    inst = svc.get(instance_id, user_id=uid, tenant_id=tenant.tenant_id)
     if inst is None:
         raise web.HTTPNotFound(text='{"error":"project_not_found"}', content_type="application/json")
     result = await asyncio.to_thread(
@@ -95,6 +95,7 @@ async def project_redeploy(request: web.Request) -> web.Response:
             instance_id=instance_id,
             user_id=uid,
             bot_token=bot_token,
+            tenant_id=tenant.tenant_id,
         )
     )
     return web.json_response(
@@ -109,16 +110,16 @@ async def project_delete(request: web.Request) -> web.Response:
     instance_id = str(request.match_info.get("id") or "").strip()
     uid = _uid(tenant.tenant_id)
     svc = get_hosting_service()
-    inst = svc.get(instance_id, user_id=uid)
+    inst = svc.get(instance_id, user_id=uid, tenant_id=tenant.tenant_id)
     if inst is None:
         raise web.HTTPNotFound(text='{"error":"project_not_found"}', content_type="application/json")
-    await asyncio.to_thread(lambda: svc.stop(instance_id=instance_id, user_id=uid))
+    await asyncio.to_thread(lambda: svc.stop(instance_id=instance_id, user_id=uid, tenant_id=tenant.tenant_id))
     try:
         svc._instances.pop(instance_id, None)
         svc._save()
         from lumen.engine.services.hosting.redis_state import delete_instance
 
-        delete_instance(instance_id, user_id=uid)
+        delete_instance(instance_id, user_id=uid, tenant_id=tenant.tenant_id)
     except Exception:
         pass
     return web.json_response({"ok": True, "deleted": instance_id})
@@ -134,7 +135,7 @@ async def project_restart(request: web.Request) -> web.Response:
     uid = _uid(tenant.tenant_id)
     result = await asyncio.to_thread(
         lambda: get_hosting_service().restart(
-            instance_id=instance_id, user_id=uid, bot_token=bot_token
+            instance_id=instance_id, user_id=uid, bot_token=bot_token, tenant_id=tenant.tenant_id
         )
     )
     return web.json_response(
