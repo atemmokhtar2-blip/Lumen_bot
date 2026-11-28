@@ -299,6 +299,7 @@ def start_trial_sandboxed_bot(
     project_path: str,
     bot_token: str,
     user_id: int = 0,
+    tenant_id: str = "",
     service_name: str = "trial-chat",
     env_vars: Optional[dict] = None,
 ):
@@ -306,6 +307,11 @@ def start_trial_sandboxed_bot(
     from .types import SandboxSpec
 
     backend, probe = select_trial_sandbox_backend(require_available=True)
+    if backend.name == "firecracker":
+        from .firecracker_backend import FirecrackerSandboxBackend
+        backend = FirecrackerSandboxBackend(
+            user_id=int(user_id or 0), tenant_id=str(tenant_id or "")
+        )
     if backend.name != "firecracker":
         try:
             from .egress import harden_network
@@ -317,6 +323,7 @@ def start_trial_sandboxed_bot(
         project_path=str(project_path),
         bot_token=bot_token,
         user_id=int(user_id or 0),
+        tenant_id=str(tenant_id or ""),
         service_name=service_name or "trial-chat",
         env_vars=dict(env_vars or {}),
     )
