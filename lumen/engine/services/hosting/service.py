@@ -1181,6 +1181,15 @@ class HostingService:
                 import sys
                 env = dict(os.environ)
                 env["PORT"] = str(internal_port)
+                env["TBE_USER_ID"] = str(int(user_id or 0))
+                env["LUMEN_PRINCIPAL_ID"] = (
+                    f"tenant:{tenant_id}" if (tenant_id or "").strip()
+                    else f"telegram:{int(user_id or 0)}"
+                )
+                if (tenant_id or "").strip():
+                    env["LUMEN_TENANT_ID"] = str(tenant_id)
+                else:
+                    env.pop("LUMEN_TENANT_ID", None)
                 # Prefer uvicorn module if available
                 cmd = [
                     sys.executable, "-m", "uvicorn",
