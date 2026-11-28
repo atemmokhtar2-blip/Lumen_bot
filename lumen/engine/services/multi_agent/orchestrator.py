@@ -282,8 +282,7 @@ def get_state(state_id: str) -> Optional[AgentState]:
 
 def latest_for_user(user_id: int) -> Optional[AgentState]:
     uid = int(user_id or 0)
-    return (get_blackboard().latest_for_principal(f"telegram:{uid}")
-            or get_blackboard().latest_for_principal(f"legacy:user:{uid}"))
+    return get_blackboard().latest_for_principal(f"telegram:{uid}")
 
 
 def latest_for_principal(principal_id: str) -> Optional[AgentState]:
@@ -603,7 +602,7 @@ def resume_after_confirm(
         state = AgentState(status=AgentStatus.FAILED.value)
         state.final_message = "state_not_found"
         return state
-    if user_id and existing.principal_id not in {expected_principal, f"legacy:user:{int(user_id)}"}:
+    if user_id and existing.principal_id != expected_principal:
         state = AgentState(user_id=int(user_id), principal_id=expected_principal, status=AgentStatus.FAILED.value)
         state.final_message = "principal_mismatch"
         return state
@@ -631,6 +630,7 @@ def continue_after_confirm(
     state_id: str,
     *,
     user_id: int = 0,
+    principal_id: str | None = None,
     work_dir: str | Path | None = None,
     board: BlackboardStore | None = None,
 ) -> AgentState:
@@ -641,9 +641,9 @@ def continue_after_confirm(
         state = AgentState(status=AgentStatus.FAILED.value)
         state.final_message = "state_not_found"
         return state
-    expected_principal = f"telegram:{int(user_id or 0)}"
+    expected_principal = str(principal_id or f"telegram:{int(user_id or 0)}")
     if user_id and (int(state.user_id or 0) not in {0, int(user_id)}
-                    or state.principal_id not in {expected_principal, f"legacy:user:{int(user_id)}"}):
+                    or state.principal_id != expected_principal):
         state.final_message = "principal_mismatch"
         return state
     pending = (state.extensions or {}).get("pending_action") or {}
