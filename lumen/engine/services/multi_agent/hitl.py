@@ -310,6 +310,7 @@ def confirm_action(
     action_id: str,
     *,
     user_id: int = 0,
+    principal_id: str | None = None,
     confirm_token: str = "",
     board: BlackboardStore | None = None,
 ) -> tuple[bool, AgentState | None, str]:
@@ -324,9 +325,11 @@ def confirm_action(
         return False, None, "state_not_found"
     supplied_uid = int(user_id or 0)
     owner_uid = int(state.user_id or 0)
-    if supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid:
-        _audit("confirm_fail", reason="user_mismatch", action_id=action_id, user_id=supplied_uid)
-        return False, state, "user_mismatch"
+    expected_principal = str(principal_id or f"telegram:{supplied_uid}")
+    if (supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid
+            or state.principal_id != expected_principal):
+        _audit("confirm_fail", reason="principal_mismatch", action_id=action_id, user_id=supplied_uid)
+        return False, state, "principal_mismatch"
 
     pending = _load_pending(state)
     if pending is None or pending.action_id != action_id:
@@ -392,6 +395,7 @@ def reject_action(
     action_id: str,
     *,
     user_id: int = 0,
+    principal_id: str | None = None,
     board: BlackboardStore | None = None,
 ) -> tuple[bool, AgentState | None, str]:
     board = board or get_blackboard()
@@ -400,8 +404,10 @@ def reject_action(
         return False, None, "state_not_found"
     supplied_uid = int(user_id or 0)
     owner_uid = int(state.user_id or 0)
-    if supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid:
-        return False, state, "user_mismatch"
+    expected_principal = str(principal_id or f"telegram:{supplied_uid}")
+    if (supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid
+            or state.principal_id != expected_principal):
+        return False, state, "principal_mismatch"
     pending = _load_pending(state)
     # Verb-only reject: action_id may be empty — accept the sole pending action
     if pending is not None and not (action_id or "").strip():
