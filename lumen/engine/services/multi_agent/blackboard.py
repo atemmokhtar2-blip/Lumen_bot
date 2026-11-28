@@ -160,7 +160,10 @@ class FileBlackboard(BlackboardStore):
             if not matches:
                 return None
             sid = max(matches, key=lambda item: float(item[1].get("updated_at") or 0))[0]
-            return self.get(sid)
+            state = self.get(sid)
+            if state is None or state.principal_id != principal:
+                return None
+            return state
 
     def list_ids(self, *, limit: int = 100) -> list[str]:
         with self._lock:
