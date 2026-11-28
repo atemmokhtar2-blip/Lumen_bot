@@ -200,7 +200,9 @@ def test_idor_job_cross_tenant_permission_error():
 def test_idor_host_instance_wrong_tenant():
     from lumen.platform.tenant_isolation import assert_instance_owner
 
-    inst = SimpleNamespace(user_id=7, tenant_id="ten_a")
+    inst = SimpleNamespace(
+        user_id=7, tenant_id="ten_a", principal_id="tenant:ten_a"
+    )
     assert assert_instance_owner(inst, user_id=7, tenant_id="ten_a") is True
     assert assert_instance_owner(inst, user_id=7, tenant_id="ten_b") is False
     assert assert_instance_owner(inst, user_id=99, tenant_id="ten_a") is False
