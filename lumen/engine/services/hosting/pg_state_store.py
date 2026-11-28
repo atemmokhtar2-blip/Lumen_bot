@@ -18,6 +18,8 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tbe_host_instances (
   instance_id TEXT PRIMARY KEY,
   user_id BIGINT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT '',
+  principal_id TEXT NOT NULL DEFAULT '',
   project_path TEXT NOT NULL DEFAULT '',
   entry_point TEXT NOT NULL DEFAULT '',
   bot_username TEXT NOT NULL DEFAULT '',
@@ -94,6 +96,8 @@ class PgHostStateStore:
             ("started_at", "DOUBLE PRECISION NOT NULL DEFAULT 0"),
             ("last_error", "TEXT NOT NULL DEFAULT ''"),
             ("pid", "BIGINT"),
+            ("tenant_id", "TEXT NOT NULL DEFAULT ''"),
+            ("principal_id", "TEXT NOT NULL DEFAULT ''"),
         )
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -116,7 +120,7 @@ class PgHostStateStore:
         if isinstance(row, dict):
             return dict(row)
         keys = [
-            "instance_id", "user_id", "project_path", "entry_point", "bot_username",
+            "instance_id", "user_id", "tenant_id", "principal_id", "project_path", "entry_point", "bot_username",
             "status", "deployment_id", "sandbox_backend", "pid", "started_at", "last_error",
             "last_diagnosis", "token_fp", "public_base_url", "webhook_public_url", "internal_port", "platform", "cpu_quota", "memory_mb", "version_ref",
             "last_health_at", "updated_at",
@@ -125,7 +129,7 @@ class PgHostStateStore:
 
     def list_all(self) -> list[dict[str, Any]]:
         sql = (
-            "SELECT instance_id, user_id, project_path, entry_point, bot_username, status, "
+            "SELECT instance_id, user_id, tenant_id, principal_id, project_path, entry_point, bot_username, status, "
             "deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis, "
             "token_fp, public_base_url, webhook_public_url, internal_port, platform, "
             "cpu_quota, memory_mb, version_ref, last_health_at, updated_at "
@@ -157,6 +161,8 @@ class PgHostStateStore:
         payload = {
             "instance_id": inst["instance_id"],
             "user_id": int(inst["user_id"]),
+            "tenant_id": str(inst.get("tenant_id") or ""),
+            "principal_id": str(inst.get("principal_id") or f"legacy:user:{int(inst['user_id'])}"),
             "project_path": inst.get("project_path") or "",
             "entry_point": inst.get("entry_point") or "",
             "bot_username": inst.get("bot_username") or "",
@@ -180,16 +186,18 @@ class PgHostStateStore:
         }
         sql = """
                     INSERT INTO tbe_host_instances (
-                      instance_id, user_id, project_path, entry_point, bot_username,
+                      instance_id, user_id, tenant_id, principal_id, project_path, entry_point, bot_username,
                       status, deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis,
                       token_fp, public_base_url, webhook_public_url, internal_port, platform, cpu_quota, memory_mb, version_ref, last_health_at, updated_at
                     ) VALUES (
-                      %(instance_id)s, %(user_id)s, %(project_path)s, %(entry_point)s, %(bot_username)s,
+                      %(instance_id)s, %(user_id)s, %(tenant_id)s, %(principal_id)s, %(project_path)s, %(entry_point)s, %(bot_username)s,
                       %(status)s, %(deployment_id)s, %(sandbox_backend)s, %(pid)s, %(started_at)s, %(last_error)s, %(last_diagnosis)s,
                       %(token_fp)s, %(public_base_url)s, %(webhook_public_url)s, %(internal_port)s, %(platform)s, %(cpu_quota)s, %(memory_mb)s, %(version_ref)s, %(last_health_at)s, %(updated_at)s
                     )
                     ON CONFLICT (instance_id) DO UPDATE SET
                       user_id=EXCLUDED.user_id,
+                      tenant_id=EXCLUDED.tenant_id,
+                      principal_id=EXCLUDED.principal_id,
                       project_path=EXCLUDED.project_path,
                       entry_point=EXCLUDED.entry_point,
                       bot_username=EXCLUDED.bot_username,
@@ -237,22 +245,28 @@ class PgHostStateStore:
             conn.commit()
 
     def running_for_user_or_token(
-        self, *, user_id: int, project_path: str, token_fp: str
+        self,
+        *,
+        user_id: int,
+        project_path: str,
+        token_fp: str,
+        principal_id: str = "",
     ) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT instance_id, user_id, project_path, entry_point, bot_username,
+                    SELECT instance_id, user_id, tenant_id, principal_id, project_path, entry_point, bot_username,
                            status, deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis,
                            token_fp, public_base_url, webhook_public_url, internal_port, platform,
                            cpu_quota, memory_mb, version_ref, last_health_at, updated_at
                     FROM tbe_host_instances
                     WHERE status = 'running'
                       AND user_id = %s
+                      AND principal_id = %s
                       AND (project_path = %s OR (token_fp != '' AND token_fp = %s))
                     """,
-                    (int(user_id), project_path, token_fp or ""),
+                    (int(user_id), principal_id, project_path, token_fp or ""),
                 )
                 rows = cur.fetchall()
         return [self._row_to_dict(r) for r in rows]
