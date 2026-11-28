@@ -223,3 +223,17 @@ def test_postgres_payload_cannot_disagree_with_owner_columns() -> None:
         assert str(exc) == "agent_state_principal_column_mismatch"
     else:
         raise AssertionError("PostgreSQL blackboard trusted mismatched principal payload")
+
+
+
+def test_file_blackboard_rejects_index_payload_principal_mismatch(tmp_path) -> None:
+    board = FileBlackboard(tmp_path)
+    state = AgentState(user_id=91, principal_id="telegram:91")
+    board.put(state)
+
+    index_path = tmp_path / "_index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index[state.state_id]["principal_id"] = "tenant:attacker"
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+
+    assert board.latest_for_principal("tenant:attacker") is None
