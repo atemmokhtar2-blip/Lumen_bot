@@ -225,10 +225,26 @@ class PostgresBlackboardStore(BlackboardStore):
             conn.execute(
                 """
                 UPDATE lumen_agent_states
-                SET principal_id = 'legacy:user:' || user_id::text,
-                    payload = jsonb_set(payload, '{principal_id}',
-                        to_jsonb('legacy:user:' || user_id::text), true)
+                SET principal_id = CASE
+                        WHEN principal_id = '' THEN 'legacy:user:' || user_id::text
+                        ELSE principal_id
+                    END,
+                    payload = jsonb_set(
+                        jsonb_set(
+                            payload,
+                            '{principal_id}',
+                            to_jsonb(CASE
+                                WHEN principal_id = '' THEN 'legacy:user:' || user_id::text
+                                ELSE principal_id
+                            END),
+                            true
+                        ),
+                        '{schema_version}',
+                        to_jsonb(3),
+                        true
+                    )
                 WHERE principal_id = ''
+                   OR payload->>'schema_version' IS DISTINCT FROM '3'
                 """
             )
             conn.execute(
