@@ -34,6 +34,7 @@ class HostInstanceRecord(BaseModel):
     instance_id: str = Field(..., min_length=1, max_length=128)
     user_id: int = Field(..., ge=0)
     tenant_id: str = Field(default="", max_length=128)
+    principal_id: str = Field(default="", max_length=256)
     project_path: str = Field(..., min_length=1)
     entry_point: str = ""
     bot_username: str = ""
