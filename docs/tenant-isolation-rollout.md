@@ -36,6 +36,10 @@ Old tenant records may exist in flat keys or keys built from the previous lossy 
 
 Old B2B directories may exist under numeric user paths. The new tenant sandbox path is keyed by the full tenant digest. Copy project data only after verifying the exact tenant ID against the authoritative project/tenant registry. Do not automatically adopt a numeric directory: collisions cannot be ruled out.
 
+### Public host routes
+
+New public URLs and reverse-proxy routes include a tenant digest suffix in the slug. Existing unscoped slugs may collide across tenants; inventory them before rollout and resolve collisions before remapping ingress routes.
+
 ### Firecracker VMs
 
 Older VM metadata may be in the shared Firecracker state root and may not contain `tenant_id`. The new per-tenant state path intentionally does not guess ownership for such metadata. Before production rollout, either stop/drain these VMs and recreate them under the new namespace, or implement and test a migration that maps each deployment ID to an authoritative HostInstance tenant record. Never assign an untagged VM to a tenant based only on its numeric user ID.
