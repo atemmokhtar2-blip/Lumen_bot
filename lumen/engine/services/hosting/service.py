@@ -999,6 +999,21 @@ class HostingService:
 
         Without LUMEN_PUBLIC_BASE: still registers; public_url empty (honest).
         """
+        # Multi-tenant production must not fall back to numeric user sandboxes.
+        try:
+            from lumen.platform.prod_security_gate import is_production_runtime
+            multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+            if is_production_runtime() and multi and not (tenant_id or "").strip():
+                return HostResult(
+                    ok=False,
+                    message="tenant_id_required: استضافة HTTP في الإنتاج تتطلب ربط المستأجر",
+                )
+        except Exception as exc:
+            logger.exception("HTTP host tenant binding check failed")
+            return HostResult(ok=False, message=f"تعذر التحقق من هوية المستأجر: {type(exc).__name__}")
+
         from pathlib import Path as _Path
         import hashlib
         from lumen.engine.services.hosting.host_mode import (
