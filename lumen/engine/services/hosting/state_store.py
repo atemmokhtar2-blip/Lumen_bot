@@ -110,6 +110,7 @@ class HostingStateStore:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_instances_principal ON instances(principal_id, user_id)"
         )
+        conn.commit()
 
     def _row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         d = dict(row)
