@@ -241,3 +241,28 @@ def test_http_ingress_uses_tenant_namespaced_registry_slug():
         encoding="utf-8",
     ).read()
     assert 'slug=str(fields["slug"])' in source
+
+
+
+def test_legacy_host_registry_rows_are_quarantined_until_owner_migration():
+    from lumen.engine.schemas.hosting_contract import HostInstanceRecord
+    from lumen.platform.tenant_isolation import assert_instance_owner
+
+    legacy = HostInstanceRecord.from_row({
+        "instance_id": "legacy-host",
+        "user_id": 123,
+        "project_path": "/tmp/legacy-host",
+        "status": "running",
+    }).to_host_instance()
+    assert legacy.principal_id == "legacy:user:123"
+    assert not assert_instance_owner(legacy, user_id=123)
+
+    telegram = HostInstanceRecord.from_row({
+        "instance_id": "telegram-host",
+        "user_id": 123,
+        "tenant_id": "",
+        "principal_id": "telegram:123",
+        "project_path": "/tmp/telegram-host",
+        "status": "running",
+    }).to_host_instance()
+    assert assert_instance_owner(telegram, user_id=123)
