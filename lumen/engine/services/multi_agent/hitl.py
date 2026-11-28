@@ -326,8 +326,10 @@ def confirm_action(
     supplied_uid = int(user_id or 0)
     owner_uid = int(state.user_id or 0)
     expected_principal = str(principal_id or f"telegram:{supplied_uid}")
-    if (supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid
-            or state.principal_id != expected_principal):
+    if supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid:
+        _audit("confirm_fail", reason="user_mismatch", action_id=action_id, user_id=supplied_uid)
+        return False, state, "user_mismatch"
+    if state.principal_id != expected_principal:
         _audit("confirm_fail", reason="principal_mismatch", action_id=action_id, user_id=supplied_uid)
         return False, state, "principal_mismatch"
 
@@ -405,8 +407,9 @@ def reject_action(
     supplied_uid = int(user_id or 0)
     owner_uid = int(state.user_id or 0)
     expected_principal = str(principal_id or f"telegram:{supplied_uid}")
-    if (supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid
-            or state.principal_id != expected_principal):
+    if supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid:
+        return False, state, "user_mismatch"
+    if state.principal_id != expected_principal:
         return False, state, "principal_mismatch"
     pending = _load_pending(state)
     # Verb-only reject: action_id may be empty — accept the sole pending action
