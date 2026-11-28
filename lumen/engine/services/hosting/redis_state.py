@@ -79,8 +79,12 @@ def put_instance(inst: Any) -> bool:
         d = _dump(inst)
         iid = str(d.get("instance_id") or "")
         uid = int(d.get("user_id") or 0)
-        tid = str(d.get("tenant_id") or "")
-        if not iid:
+        tid = str(d.get("tenant_id") or "").strip()
+        principal_id = str(d.get("principal_id") or "")
+        expected_principal = (
+            f"tenant:{tid}" if tid else f"telegram:{uid}"
+        )
+        if not iid or uid <= 0 or principal_id != expected_principal:
             return False
         from lumen.platform.tenant_isolation import host_instance_redis_key, host_user_index_key
         pipe = r.pipeline()
@@ -117,8 +121,19 @@ def get_instance(instance_id: str, *, tenant_id: str = "") -> Optional[dict[str,
         d = json.loads(raw)
         stored_tenant = str(d.get("tenant_id") or "").strip()
         requested_tenant = str(tenant_id or "").strip()
-        # Exact namespace match; no cross-tenant or legacy-flat fallback.
-        if stored_tenant != requested_tenant:
+        stored_user_id = int(d.get("user_id") or 0)
+        expected_principal = (
+            f"tenant:{requested_tenant}"
+            if requested_tenant
+            else f"telegram:{stored_user_id}"
+        )
+        stored_principal = str(d.get("principal_id") or "")
+        # Exact namespace and principal match; legacy rows are quarantined.
+        if (
+            stored_tenant != requested_tenant
+            or stored_user_id <= 0
+            or stored_principal != expected_principal
+        ):
             return None
         return d
     except Exception:
