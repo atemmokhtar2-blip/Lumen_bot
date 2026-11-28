@@ -237,8 +237,9 @@ class HostingService:
             )
         except ValueError as ve:
             return HostResult(ok=False, message=f"عزل المسار: {ve}")
-        except Exception:
-            path = Path(project_path).resolve()
+        except Exception as exc:
+            logger.exception("host project containment verification failed")
+            return HostResult(ok=False, message=f"تعذر التحقق من عزل المسار: {type(exc).__name__}")
         if not path.is_dir():
             return HostResult(ok=False, message="مسار المشروع غير موجود")
 
