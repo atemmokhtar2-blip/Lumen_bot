@@ -92,6 +92,7 @@ def test_execution_grant_rejects_missing_or_mismatched_user():
     state.extensions["hitl_execute_grant"] = {
         "tool": "host_start",
         "user_id": 42,
+        "principal_id": "telegram:42",
         "params_digest": _params_digest(params),
         "single_use": True,
     }
@@ -101,6 +102,7 @@ def test_execution_grant_rejects_missing_or_mismatched_user():
     assert "hitl_execute_grant" in state.extensions
 
     state.user_id = 42
+    state.principal_id = "telegram:42"
     assert consume_execute_grant(
         state, "host_start", user_id=42, params=params
     )
@@ -113,6 +115,7 @@ def test_execution_grant_rejects_zero_owner():
     state.extensions["hitl_execute_grant"] = {
         "tool": "host_start",
         "user_id": 0,
+        "principal_id": "telegram:0",
         "params_digest": _params_digest(params),
         "single_use": True,
     }
