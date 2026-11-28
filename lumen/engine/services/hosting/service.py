@@ -1239,7 +1239,12 @@ class HostingService:
             if dep:
                 try:
                     from lumen.hosting.orchestration import stop_host as _orch_stop
-                    _orch_stop(dep, backend=str(inst.sandbox_backend or "firecracker"))
+                    _orch_stop(
+                        dep,
+                        backend=str(inst.sandbox_backend or "firecracker"),
+                        user_id=int(inst.user_id or 0),
+                        tenant_id=str(inst.tenant_id or ""),
+                    )
                     stopped = True
                 except Exception as fc_exc:
                     inst.last_error = f"fc_stop:{type(fc_exc).__name__}:{fc_exc}"[:300]
@@ -1503,7 +1508,9 @@ class HostingService:
                     pass
             elif dep:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import FirecrackerSandboxBackend
-                b = FirecrackerSandboxBackend()
+                b = FirecrackerSandboxBackend(
+                    user_id=int(inst.user_id or 0), tenant_id=str(inst.tenant_id or "")
+                )
                 raw = b.logs(dep, limit=max(10, min(200, int(limit))))
                 lines = [sanitize_log_text(str(x)) for x in (raw or [])]
         except Exception as exc:
@@ -1599,7 +1606,9 @@ class HostingService:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                     FirecrackerSandboxBackend,
                 )
-                st = FirecrackerSandboxBackend().status(dep)
+                st = FirecrackerSandboxBackend(
+                    user_id=int(inst.user_id or 0), tenant_id=str(inst.tenant_id or "")
+                ).status(dep)
                 if str(st.status).lower() != "running":
                     return False
                 meta = dict(getattr(st, "meta", None) or {})
@@ -1625,7 +1634,9 @@ class HostingService:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                     FirecrackerSandboxBackend,
                 )
-                lines = FirecrackerSandboxBackend().logs(dep, limit=200)
+                lines = FirecrackerSandboxBackend(
+                    user_id=int(inst.user_id or 0), tenant_id=str(inst.tenant_id or "")
+                ).logs(dep, limit=200)
                 run_log = sanitize_log_text("\n".join(lines)[-8000:])
             elif dep:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
