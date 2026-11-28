@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS instances (
 );
 CREATE INDEX IF NOT EXISTS idx_instances_user ON instances(user_id);
 CREATE INDEX IF NOT EXISTS idx_instances_token ON instances(token_fp);
+CREATE INDEX IF NOT EXISTS idx_instances_principal ON instances(principal_id, user_id);
 """
 
 
