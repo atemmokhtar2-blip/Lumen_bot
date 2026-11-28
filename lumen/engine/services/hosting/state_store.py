@@ -125,11 +125,15 @@ class HostingStateStore:
         rows = conn.execute("SELECT * FROM instances").fetchall()
         return [self._row_to_dict(r) for r in rows]
 
-    def list_for_user(self, user_id: int) -> list[dict[str, Any]]:
+    def list_for_user(
+        self, user_id: int, *, principal_id: str | None = None
+    ) -> list[dict[str, Any]]:
         conn = self._conn()
+        uid = int(user_id)
+        principal = str(principal_id or f"telegram:{uid}")
         rows = conn.execute(
-            "SELECT * FROM instances WHERE user_id = ?",
-            (int(user_id),),
+            "SELECT * FROM instances WHERE user_id = ? AND principal_id = ?",
+            (uid, principal),
         ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
@@ -229,9 +233,10 @@ class HostingStateStore:
         user_id: int,
         project_path: str,
         token_fp: str,
-        principal_id: str = "",
+        principal_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Atomically list conflicting running instances for stop-before-start."""
+        """Atomically list conflicts within one namespaced owner."""
+        principal = str(principal_id or f"telegram:{int(user_id)}")
         conn = self._conn()
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -243,7 +248,7 @@ class HostingStateStore:
                   AND principal_id = ?
                   AND (project_path = ? OR (token_fp != '' AND token_fp = ?))
                 """,
-                (int(user_id), principal_id, project_path, token_fp or ""),
+                (int(user_id), principal, project_path, token_fp or ""),
             ).fetchall()
             result = [self._row_to_dict(r) for r in rows]
             conn.execute("COMMIT")
