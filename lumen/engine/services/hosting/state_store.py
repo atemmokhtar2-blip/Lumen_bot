@@ -20,6 +20,8 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS instances (
     instance_id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT '',
+    principal_id TEXT NOT NULL DEFAULT '',
     project_path TEXT NOT NULL,
     entry_point TEXT DEFAULT '',
     bot_username TEXT DEFAULT '',
@@ -98,6 +100,8 @@ class HostingStateStore:
             ("memory_mb", "INTEGER DEFAULT 128"),
             ("version_ref", "TEXT DEFAULT ''"),
             ("last_health_at", "REAL DEFAULT 0"),
+            ("tenant_id", "TEXT NOT NULL DEFAULT ''"),
+            ("principal_id", "TEXT NOT NULL DEFAULT ''"),
         ):
             try:
                 conn.execute(f"ALTER TABLE instances ADD COLUMN {col} {decl}")
@@ -143,13 +147,15 @@ class HostingStateStore:
             conn.execute(
                 """
                 INSERT INTO instances (
-                    instance_id, user_id, project_path, entry_point, bot_username,
+                    instance_id, user_id, tenant_id, principal_id, project_path, entry_point, bot_username,
                     status, deployment_id, sandbox_backend, pid, started_at, last_error,
                     last_diagnosis, token_fp, public_base_url, webhook_public_url, internal_port, platform, cpu_quota, memory_mb, version_ref, last_health_at,
                     updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(instance_id) DO UPDATE SET
                     user_id=excluded.user_id,
+                    tenant_id=excluded.tenant_id,
+                    principal_id=excluded.principal_id,
                     project_path=excluded.project_path,
                     entry_point=excluded.entry_point,
                     bot_username=excluded.bot_username,
@@ -174,6 +180,8 @@ class HostingStateStore:
                 (
                     inst["instance_id"],
                     int(inst["user_id"]),
+                    str(inst.get("tenant_id") or ""),
+                    str(inst.get("principal_id") or f"legacy:user:{int(inst['user_id'])}"),
                     inst.get("project_path") or "",
                     inst.get("entry_point") or "",
                     inst.get("bot_username") or "",
@@ -212,7 +220,12 @@ class HostingStateStore:
             raise
 
     def running_for_user_or_token(
-        self, *, user_id: int, project_path: str, token_fp: str
+        self,
+        *,
+        user_id: int,
+        project_path: str,
+        token_fp: str,
+        principal_id: str = "",
     ) -> list[dict[str, Any]]:
         """Atomically list conflicting running instances for stop-before-start."""
         conn = self._conn()
@@ -223,9 +236,10 @@ class HostingStateStore:
                 SELECT * FROM instances
                 WHERE status = 'running'
                   AND user_id = ?
+                  AND principal_id = ?
                   AND (project_path = ? OR (token_fp != '' AND token_fp = ?))
                 """,
-                (int(user_id), project_path, token_fp or ""),
+                (int(user_id), principal_id, project_path, token_fp or ""),
             ).fetchall()
             result = [self._row_to_dict(r) for r in rows]
             conn.execute("COMMIT")
