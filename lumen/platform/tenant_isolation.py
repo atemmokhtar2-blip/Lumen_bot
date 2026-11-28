@@ -11,13 +11,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-import re
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("lumen.tenant_isolation")
-
-_TENANT_SAFE = re.compile(r"[^a-zA-Z0-9_-]+")
 
 
 def safe_tenant_segment(tenant_id: str) -> str:
