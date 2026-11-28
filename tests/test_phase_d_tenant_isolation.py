@@ -194,3 +194,23 @@ def test_host_service_list_isolates_tenant_from_telegram_same_numeric_uid(monkey
     }
     assert [x.instance_id for x in service.list_for_user(123)] == ["telegram"]
     assert [x.instance_id for x in service.list_for_user(123, tenant_id="tenant/acme")] == ["tenant"]
+
+
+
+def test_http_host_requires_tenant_binding_in_production(tmp_path, monkeypatch):
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    from lumen.engine.services.hosting.service import HostingService
+    monkeypatch.setattr(
+        "lumen.platform.prod_security_gate.is_production_runtime",
+        lambda: True,
+    )
+    service = HostingService.__new__(HostingService)
+    service.output_root = tmp_path
+
+    result = service.start_http_public(
+        user_id=5,
+        project_path=tmp_path,
+        tenant_id="",
+    )
+    assert result.ok is False
+    assert "tenant_id_required" in result.message
