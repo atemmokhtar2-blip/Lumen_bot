@@ -187,7 +187,9 @@ class AgentState:
 
     def __post_init__(self) -> None:
         if not self.principal_id:
-            self.principal_id = f"legacy:user:{int(self.user_id or 0)}"
+            # New AgentState instances default to the Telegram principal.
+            # from_dict() explicitly marks records without this field as legacy.
+            self.principal_id = f"telegram:{int(self.user_id or 0)}"
         self.principal_id = str(self.principal_id).strip()
         if not self.principal_id or len(self.principal_id) > 256:
             raise ValueError("invalid_principal_id")
