@@ -275,3 +275,32 @@ def test_legacy_host_registry_rows_are_quarantined_until_owner_migration():
         "status": "running",
     }).to_host_instance()
     assert assert_instance_owner(telegram, user_id=123)
+
+
+
+def test_sqlite_host_registry_persists_principal_and_quarantines_legacy(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    from lumen.engine.services.hosting.models import HostInstance
+    from lumen.engine.services.hosting.state_store import HostingStateStore
+    from lumen.engine.schemas.hosting_contract import HostInstanceRecord
+
+    store = HostingStateStore(tmp_path / "instances.sqlite3")
+    tenant = HostInstance(
+        instance_id="tenant-row",
+        user_id=123,
+        tenant_id="tenant/acme",
+        project_path="/tmp/tenant",
+    )
+    store.upsert(HostInstanceRecord.from_host_instance(tenant).to_persist_dict())
+    row = store.get("tenant-row")
+    assert row["tenant_id"] == "tenant/acme"
+    assert row["principal_id"] == "tenant:tenant/acme"
+
+    store.upsert({
+        "instance_id": "legacy-row",
+        "user_id": 123,
+        "project_path": "/tmp/legacy",
+        "status": "running",
+    })
+    legacy = store.get("legacy-row")
+    assert legacy["principal_id"] == "legacy:user:123"
