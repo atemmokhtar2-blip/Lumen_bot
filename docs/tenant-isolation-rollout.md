@@ -28,6 +28,10 @@ The schema migration moves records with an empty principal into `legacy:user:<id
 
 Old index entries without principal metadata remain addressable only through the explicit legacy namespace. Do not automatically expose them to Telegram.
 
+### Host registry records
+
+Persisted host rows without a `principal_id` deserialize into `legacy:user:<id>` and are not accessible through either Telegram or B2B ownership checks. Map each row to an exact `telegram:<id>` or `tenant:<tenant_id>` principal only when the authoritative account/tenant registry proves ownership. Do not infer the owner from `user_id` alone.
+
 ### Host Redis records
 
 Old tenant records may exist in flat keys or keys built from the previous lossy tenant slug. New code intentionally does not read those keys. Rebuild the new digest-based tenant indexes from the authoritative HostingStateStore/PostgreSQL records, checking exact tenant ownership before writing. Never copy a flat record into a tenant namespace based only on numeric user ID.
