@@ -122,7 +122,11 @@ def _try_auto_repair(hosting_service, inst) -> bool:
             path,
             bot_token=token,
             user_id=int(getattr(inst, "user_id", 0) or 0),
-            service_name=f"lumen-u{int(getattr(inst, 'user_id', 0) or 0)}-heal",
+            tenant_id=str(getattr(inst, "tenant_id", "") or ""),
+            service_name=(
+                f"lumen-t{__import__('hashlib').sha256(str(getattr(inst, 'tenant_id', '') or '').encode()).hexdigest()[:10]}-"
+                f"u{int(getattr(inst, 'user_id', 0) or 0)}-heal"
+            ),
         )
         diag["last_auto_repair_at"] = time.time()
         if not rep.ok:
