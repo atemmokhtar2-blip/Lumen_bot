@@ -239,18 +239,16 @@ def process_one(queue=None, fleet=None) -> bool:
                     "version_ref": str((prep.details or {}).get("version_ref") or ""),
                     "last_health_at": _time.time(),
                 }
+                # Durable owner-immutable store first; Redis is only a cache.
+                from lumen.engine.services.hosting.state_store import get_host_state_store
+                from lumen.bot.config import OUTPUT_DIR
+                from pathlib import Path as _Path
+                store = get_host_state_store(_Path(OUTPUT_DIR) / "hosting" / "instances.sqlite3")
+                store.upsert(payload)
                 try:
                     host_redis.put_instance(payload)
                 except Exception:
                     logger.exception("worker redis put failed")
-                try:
-                    from lumen.engine.services.hosting.state_store import get_host_state_store
-                    from lumen.bot.config import OUTPUT_DIR
-                    from pathlib import Path as _Path
-                    store = get_host_state_store(_Path(OUTPUT_DIR) / "hosting" / "instances.sqlite3")
-                    store.upsert(payload)
-                except Exception:
-                    logger.exception("worker durable state upsert failed")
                 try:
                     record_start(int(job.user_id))
                 except Exception:
