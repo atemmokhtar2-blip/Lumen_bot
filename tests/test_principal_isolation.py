@@ -22,8 +22,15 @@ def test_agent_state_principal_round_trip_and_legacy_default() -> None:
     restored = AgentState.from_dict(state.to_dict())
     assert restored.principal_id == state.principal_id
 
-    legacy = AgentState.from_dict({"user_id": 42})
+    legacy = AgentState.from_dict({"user_id": 42, "schema_version": 2})
     assert legacy.principal_id == "legacy:user:42"
+    assert legacy.schema_version == 3
+    try:
+        AgentState.from_dict({"schema_version": 999})
+    except ValueError as exc:
+        assert str(exc) == "unsupported_agent_state_schema"
+    else:
+        raise AssertionError("future AgentState schema was silently accepted")
     telegram = AgentState(user_id=42, principal_id="telegram:42")
     assert AgentState.from_dict(telegram.to_dict()).principal_id == "telegram:42"
 
