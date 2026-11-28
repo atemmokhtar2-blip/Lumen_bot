@@ -114,8 +114,8 @@ def allocate_public_url(
     slug_n = normalize_slug(slug or instance_id or "app")
     tenant = str(tenant_id or "").strip()
     if tenant:
-        suffix = hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:10]
-        slug_n = normalize_slug(f"{slug_n[:37]}-{suffix}")
+        suffix = hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:16]
+        slug_n = normalize_slug(f"{slug_n[:31]}-{suffix}")
     sch = scheme or url_scheme()
     hp = health_path()
 
