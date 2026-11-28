@@ -108,6 +108,9 @@ class HostingStateStore:
             except Exception:
                 pass
         conn.execute(
+            "UPDATE instances SET principal_id = 'legacy:user:' || user_id WHERE principal_id = ''"
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_instances_principal ON instances(principal_id, user_id)"
         )
         conn.commit()
@@ -149,6 +152,21 @@ class HostingStateStore:
         conn = self._conn()
         conn.execute("BEGIN IMMEDIATE")
         try:
+            incoming_user_id = int(inst["user_id"])
+            incoming_tenant_id = str(inst.get("tenant_id") or "")
+            incoming_principal_id = str(
+                inst.get("principal_id") or f"legacy:user:{incoming_user_id}"
+            )
+            existing = conn.execute(
+                "SELECT user_id, tenant_id, principal_id FROM instances WHERE instance_id = ?",
+                (str(inst["instance_id"]),),
+            ).fetchone()
+            if existing is not None and (
+                int(existing["user_id"]) != incoming_user_id
+                or str(existing["tenant_id"] or "") != incoming_tenant_id
+                or str(existing["principal_id"] or f"legacy:user:{int(existing['user_id'])}") != incoming_principal_id
+            ):
+                raise PermissionError("host_instance_owner_mismatch")
             diag = inst.get("last_diagnosis") or {}
             if not isinstance(diag, str):
                 diag = json.dumps(diag, ensure_ascii=False)
