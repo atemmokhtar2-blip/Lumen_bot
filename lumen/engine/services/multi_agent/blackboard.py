@@ -276,7 +276,14 @@ class PostgresBlackboardStore(BlackboardStore):
             payload = json.loads(payload)
         if not isinstance(payload, dict):
             raise ValueError("invalid_agent_state_payload")
-        return AgentState.from_dict(payload)
+        state = AgentState.from_dict(payload)
+        stored_principal = row.get("principal_id")
+        stored_user_id = row.get("user_id")
+        if stored_principal is not None and str(stored_principal) != state.principal_id:
+            raise ValueError("agent_state_principal_column_mismatch")
+        if stored_user_id is not None and int(stored_user_id) != int(state.user_id or 0):
+            raise ValueError("agent_state_user_column_mismatch")
+        return state
 
     def put(self, state: AgentState) -> AgentState:
         state.touch()
@@ -312,7 +319,7 @@ class PostgresBlackboardStore(BlackboardStore):
     def get(self, state_id: str) -> Optional[AgentState]:
         with self._pool.connection(timeout=10) as conn:
             row = conn.execute(
-                "SELECT payload FROM lumen_agent_states WHERE state_id=%s",
+                "SELECT payload, principal_id, user_id FROM lumen_agent_states WHERE state_id=%s",
                 (str(state_id or ""),),
             ).fetchone()
         return self._decode(row)
@@ -329,7 +336,7 @@ class PostgresBlackboardStore(BlackboardStore):
         with self._pool.connection(timeout=10) as conn:
             row = conn.execute(
                 """
-                SELECT payload FROM lumen_agent_states
+                SELECT payload, principal_id, user_id FROM lumen_agent_states
                 WHERE principal_id=%s
                 ORDER BY updated_at DESC
                 LIMIT 1
