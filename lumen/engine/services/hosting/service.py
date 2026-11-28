@@ -187,6 +187,15 @@ class HostingService:
         iid = str(instance_id or "").strip()
         if not iid:
             return None
+        try:
+            with self._lock():
+                for row in self._store.list_all():
+                    if str(row.get("instance_id") or "") == iid:
+                        inst = self._inst_from_row(row)
+                        self._instances[iid] = inst
+                        return inst
+        except Exception:
+            logger.exception("internal host registry refresh failed")
         self._load()
         return self._instances.get(iid)
 
