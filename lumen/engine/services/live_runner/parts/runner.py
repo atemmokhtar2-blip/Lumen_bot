@@ -72,6 +72,7 @@ class LiveRunnerService:
         entry_hint: str | None,
         run_seconds: float,
         t0: float,
+        user_id: int = 0,
     ) -> LiveRunReport:
         """Ephemeral try-in-chat — never registers permanent HostService state."""
         from lumen.engine.services.runtime_planes import RuntimePlane, plane_label_ar
@@ -135,8 +136,8 @@ class LiveRunnerService:
                 backend, handle = _start_serverless(
                     project_path=str(root),
                     bot_token=bot_token,
-                    user_id=0,
-                    service_name=f"trial-{int(time.time()) % 10_000_000}",
+                    user_id=int(user_id or 0),
+                    service_name=f"trial-{int(user_id or 0)}-{int(time.time()) % 10_000_000}",
                     env_vars={
                         "TELEGRAM_BOT_TOKEN": bot_token,
                         "BOT_TOKEN": bot_token,
@@ -208,8 +209,8 @@ class LiveRunnerService:
             backend, handle = start_trial_sandboxed_bot(
                 project_path=str(root),
                 bot_token=bot_token,
-                user_id=0,
-                service_name="trial-chat",
+                user_id=int(user_id or 0),
+                service_name=f"trial-u{int(user_id or 0)}",
                 env_vars={
                     "TELEGRAM_BOT_TOKEN": bot_token,
                     "BOT_TOKEN": bot_token,
@@ -290,6 +291,7 @@ class LiveRunnerService:
         run_seconds: float = float(__import__('os').environ.get('LIVE_RUN_SECONDS', 900)),
         install: bool = True,
         max_heal_rounds: int = 5,
+        user_id: int = 0,
     ) -> LiveRunReport:
         """
         Real install + run with Auto-Heal for missing dependencies.
@@ -309,6 +311,7 @@ class LiveRunnerService:
             entry_hint=entry_hint,
             run_seconds=run_seconds,
             t0=t0,
+            user_id=int(user_id or 0),
         )
         # legacy body kept below for reference / dev tools — unreachable
         try:
@@ -861,6 +864,7 @@ def run_bot_project(
     bot_token: str,
     entry_hint: str | None = None,
     run_seconds: float = float(__import__('os').environ.get('LIVE_RUN_SECONDS', 900)),
+    user_id: int = 0,
 ) -> LiveRunReport:
     """TRIAL_CHAT entry — delegates to LiveRunnerService (isolated, ephemeral).
 
@@ -872,4 +876,5 @@ def run_bot_project(
         bot_token=bot_token,
         entry_hint=entry_hint,
         run_seconds=run_seconds,
+        user_id=int(user_id or 0),
     )
