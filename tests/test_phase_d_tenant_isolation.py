@@ -257,6 +257,15 @@ def test_legacy_host_registry_rows_are_quarantined_until_owner_migration():
     assert legacy.principal_id == "legacy:user:123"
     assert not assert_instance_owner(legacy, user_id=123)
 
+    null_principal = HostInstanceRecord.from_row({
+        "instance_id": "null-principal",
+        "user_id": 123,
+        "principal_id": None,
+        "project_path": "/tmp/null-principal",
+    }).to_host_instance()
+    assert null_principal.principal_id == "legacy:user:123"
+    assert not assert_instance_owner(null_principal, user_id=123)
+
     telegram = HostInstanceRecord.from_row({
         "instance_id": "telegram-host",
         "user_id": 123,
