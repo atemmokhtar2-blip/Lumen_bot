@@ -61,7 +61,8 @@ def test_file_blackboard_scopes_principals_and_reads_legacy_index(tmp_path) -> N
         "updated_at": legacy.updated_at,
     }
     index_path.write_text(json.dumps(index), encoding="utf-8")
-    assert board.latest_for_user(89).state_id == legacy.state_id
+    assert board.latest_for_principal("legacy:user:89").state_id == legacy.state_id
+    assert board.latest_for_user(89) is None
 
 
 
