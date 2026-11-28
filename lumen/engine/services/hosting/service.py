@@ -1160,7 +1160,7 @@ class HostingService:
             from lumen.engine.services.hosting.ingress import write_http_path_route
             route_meta = write_http_path_route(
                 instance_id=iid,
-                slug=slug_n,
+                slug=str(fields["slug"]),
                 upstream_host="127.0.0.1",
                 upstream_port=internal_port,
                 enabled=True,
