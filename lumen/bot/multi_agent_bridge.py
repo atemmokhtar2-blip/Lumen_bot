@@ -43,6 +43,7 @@ def try_handle_hitl_message(
         return False, "", None
 
     verb, action_id, token = parsed
+    expected_principal = f"telegram:{int(user_id or 0)}"
     state_id = ""
     pending: dict = {}
     if isinstance(user_data, dict):
@@ -103,6 +104,7 @@ def try_handle_hitl_message(
             if (
                 board_state is not None
                 and int(getattr(board_state, "user_id", 0) or 0) == int(user_id or 0)
+                and str(getattr(board_state, "principal_id", "") or "") == expected_principal
             ):
                 ext = getattr(board_state, "extensions", None) or {}
                 bp = ext.get("pending_action") or {}
@@ -127,7 +129,10 @@ def try_handle_hitl_message(
         return True, "لا يوجد إجراء معلّق. اطلب التوليد من جديد ثم أكّد أو ارفض.", None
 
     if verb == "reject":
-        ok, state, reason = reject_action(state_id, action_id, user_id=int(user_id or 0))
+        ok, state, reason = reject_action(
+            state_id, action_id, user_id=int(user_id or 0),
+            principal_id=expected_principal,
+        )
         if ok and state is not None:
             ext = getattr(state, "extensions", None) or {}
             pend = ext.get("pending_action") or {}
@@ -152,6 +157,7 @@ def try_handle_hitl_message(
         reason_ar = {
             "state_not_found": "لم يُعثر على الجلسة",
             "user_mismatch": "هذا الطلب ليس لحسابك",
+            "principal_mismatch": "هذا الطلب لا يخص هوية حسابك",
             "action_mismatch": "لا يوجد إجراء معلّق للرفض",
         }.get(str(reason), str(reason))
         return True, f"تعذر الرفض: {reason_ar}", None
@@ -169,7 +175,8 @@ def try_handle_hitl_message(
         ), None
 
     ok, state, reason = confirm_action(
-        state_id, action_id, user_id=int(user_id or 0), confirm_token=token or "",
+        state_id, action_id, user_id=int(user_id or 0),
+        principal_id=expected_principal, confirm_token=token or "",
     )
     if not ok or state is None:
         reason_ar = {
@@ -181,13 +188,16 @@ def try_handle_hitl_message(
             "expired": "انتهت مهلة الموافقة (انتهت الصلاحية) — أعد التوليد",
             "state_not_found": "لم يُعثر على جلسة التوليد — أعد التوليد",
             "user_mismatch": "التأكيد يجب أن يكون من نفس الحساب",
+            "principal_mismatch": "هذا الطلب لا يخص هوية حسابك",
         }.get(str(reason), str(reason))
         if str(reason).startswith("already_"):
             reason_ar = "تم التعامل مع هذا الإجراء مسبقاً"
         return True, f"تعذر التأكيد: {reason_ar}"[:4000], None
 
     try:
-        state = continue_after_confirm(state_id, user_id=int(user_id or 0))
+        state = continue_after_confirm(
+            state_id, user_id=int(user_id or 0), principal_id=expected_principal,
+        )
     except Exception as exc:
         logger.exception("continue_after_confirm failed")
         state = get_blackboard().get(state_id)
