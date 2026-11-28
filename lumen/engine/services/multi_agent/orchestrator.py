@@ -607,7 +607,8 @@ def resume_after_confirm(
         state.final_message = "principal_mismatch"
         return state
     ok, state, reason = confirm_action(
-        state_id, action_id, user_id=user_id, confirm_token=confirm_token, board=board,
+        state_id, action_id, user_id=user_id, principal_id=expected_principal,
+        confirm_token=confirm_token, board=board,
     )
     if not ok or state is None:
         if state is None:
