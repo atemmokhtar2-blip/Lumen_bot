@@ -147,6 +147,8 @@ class HostInstanceRecord(BaseModel):
         payload = dict(row or {})
         if payload.get("principal_id") is None:
             payload["principal_id"] = ""
+        if payload.get("tenant_id") is None:
+            payload["tenant_id"] = ""
         return cls.model_validate(payload)
 
     @classmethod
