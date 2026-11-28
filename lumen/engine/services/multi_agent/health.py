@@ -15,7 +15,9 @@ def _check_blackboard() -> dict[str, Any]:
     t0 = time.time()
     try:
         board = get_blackboard()
-        probe = AgentState(user_id=0, user_text="__health_probe__")
+        probe = AgentState(
+            user_id=0, principal_id="system:health", user_text="__health_probe__"
+        )
         probe.extensions["health_probe"] = True
         board.put(probe)
         got = board.get(probe.state_id)
