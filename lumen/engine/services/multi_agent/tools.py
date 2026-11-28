@@ -119,6 +119,7 @@ def execute_tool_gated(
                 state,
                 tool,
                 user_id=int(state.user_id or 0),
+                principal_id=str(state.principal_id),
                 params=dict(params or {}),
             ):
                 # No valid grant — re-request confirmation
