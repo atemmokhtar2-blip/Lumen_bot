@@ -159,19 +159,23 @@ class HostingService:
             pass
         return list(by_id.values())
 
-    def list_for_user(self, user_id: int) -> list[HostInstance]:
-        out = {i.instance_id: i for i in self._instances.values() if i.user_id == user_id}
+    def list_for_user(self, user_id: int, *, tenant_id: str = "") -> list[HostInstance]:
+        from lumen.platform.tenant_isolation import assert_instance_owner
+
+        out: dict[str, HostInstance] = {}
+        for inst in self._instances.values():
+            if assert_instance_owner(inst, user_id=user_id, tenant_id=tenant_id):
+                out[inst.instance_id] = inst
         try:
             from lumen.engine.services.hosting import redis_state as host_redis
-            for remote in host_redis.list_for_user(int(user_id)):
-                iid = str(remote.get("instance_id") or "")
-                if not iid:
-                    continue
+            for remote in host_redis.list_for_user(int(user_id), tenant_id=tenant_id):
                 inst = self._inst_from_row(remote)
-                out[iid] = inst
-                self._instances[iid] = inst
+                if not assert_instance_owner(inst, user_id=user_id, tenant_id=tenant_id):
+                    continue
+                out[inst.instance_id] = inst
+                self._instances[inst.instance_id] = inst
         except Exception:
-            pass
+            logger.exception("tenant-scoped host list failed")
         return list(out.values())
 
     def get(
@@ -287,8 +291,12 @@ class HostingService:
         # API layer already checks tenant sandbox; HostService enforces the same
         # invariant so internal callers cannot host another tenant's tree.
         try:
-            from lumen.engine.services.user_sandbox import get_user_sandbox
-            sandbox = get_user_sandbox(int(user_id), self.output_root)
+            from lumen.engine.services.user_sandbox import get_tenant_sandbox, get_user_sandbox
+            sandbox = (
+                get_tenant_sandbox(tenant_id, self.output_root)
+                if (tenant_id or "").strip()
+                else get_user_sandbox(int(user_id), self.output_root)
+            )
             if not sandbox.is_under_sandbox(path):
                 return HostResult(ok=False, message="مسار المشروع خارج مساحة عزل المستخدم")
             try:
@@ -1375,6 +1383,7 @@ class HostingService:
         instance_id: str,
         user_id: int,
         bot_token: str = "",
+        tenant_id: str = "",
     ) -> HostResult:
         """One-shot: re-prepare project (deps/version) then restart same instance_id."""
         inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
@@ -1398,10 +1407,13 @@ class HostingService:
                 message=f"redeploy_prepare:{type(exc).__name__}",
                 instance=inst,
             )
-        return self.restart(instance_id=instance_id, user_id=user_id, bot_token=bot_token)
+        return self.restart(
+            instance_id=instance_id, user_id=user_id, bot_token=bot_token,
+            tenant_id=tenant_id,
+        )
 
     def status(self, *, user_id: int, instance_id: str | None = None, tenant_id: str = "") -> HostResult:
-        items = self.list_for_user(user_id)
+        items = self.list_for_user(user_id, tenant_id=tenant_id)
         if instance_id:
             inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
             if not inst:
