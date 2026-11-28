@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from lumen.platform.paths import default_output_dir as _cm_default_output_dir
 
+import hashlib
 import json
 import logging
 import os
