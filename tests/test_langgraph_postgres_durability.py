@@ -212,3 +212,42 @@ def test_postgres_blackboard_never_persists_raw_hitl_token():
     assert row is not None
     assert pending.confirm_token not in row["payload_text"]
     board.delete(state.state_id)
+
+
+
+def test_postgres_blackboard_scopes_same_numeric_user_to_distinct_principals():
+    from lumen.engine.services.multi_agent.blackboard import get_blackboard
+    from lumen.engine.services.multi_agent.state import AgentState
+
+    board = get_blackboard()
+    telegram = AgentState(
+        user_id=906,
+        principal_id="telegram:906",
+        user_text="telegram private state",
+    )
+    tenant = AgentState(
+        user_id=906,
+        principal_id="tenant:acme",
+        user_text="tenant private state",
+    )
+    board.put(telegram)
+    board.put(tenant)
+
+    assert board.latest_for_principal("telegram:906").state_id == telegram.state_id
+    assert board.latest_for_principal("tenant:acme").state_id == tenant.state_id
+    assert board.latest_for_user(906).state_id == telegram.state_id
+    assert board.latest_for_principal("legacy:user:906") is None
+
+    forged = AgentState(
+        state_id=telegram.state_id,
+        user_id=906,
+        principal_id="tenant:attacker",
+        user_text="cross-principal overwrite",
+    )
+    with pytest.raises(PermissionError, match="agent_state_owner_mismatch"):
+        board.put(forged)
+
+    assert board.get(telegram.state_id).user_text == "telegram private state"
+    assert board.get(tenant.state_id).user_text == "tenant private state"
+    board.delete(telegram.state_id)
+    board.delete(tenant.state_id)
